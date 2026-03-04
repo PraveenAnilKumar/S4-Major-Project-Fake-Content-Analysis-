@@ -1,420 +1,590 @@
 """
-deepfake_detector_advanced.py - Advanced Deepfake Detector with compatibility fixes
-Compatible with train_deepfake_batch_advanced.py (224x224 input)
+Advanced Deepfake Detector with Ensemble Learning
+Supports loading existing .h5 model files and model switching
 """
 
-import tensorflow as tf
-from tensorflow.keras import layers, models, applications
 import numpy as np
 import cv2
-from facenet_pytorch import MTCNN
-import torch
 from PIL import Image
+import tensorflow as tf
+from tensorflow.keras.models import load_model
+from tensorflow.keras.applications import ResNet50, EfficientNetB0, Xception
+from tensorflow.keras.applications.resnet50 import preprocess_input as resnet_preprocess
+from tensorflow.keras.applications.efficientnet import preprocess_input as efficientnet_preprocess
+from tensorflow.keras.applications.xception import preprocess_input as xception_preprocess
+from tensorflow.keras.preprocessing import image
 import os
-import joblib
-import mediapipe as mp
-import warnings
-import gc
-import time
+import glob
+import logging
+from typing import Dict, List, Tuple, Optional, Any
+import hashlib
+from datetime import datetime
+import json
 
-warnings.filterwarnings('ignore')
+# Configure logging
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
-class AdvancedDeepfakeDetector:
-    def __init__(self, input_size=224):  # match training script
-        self.input_size = input_size
-        self.input_shape = (input_size, input_size, 3)
-        self.device = 'cuda' if torch.cuda.is_available() else 'cpu'
-        self.mtcnn = MTCNN(keep_all=True, device=self.device, select_largest=False)
-
-        try:
-            self.mp_face_mesh = mp.solutions.face_mesh.FaceMesh(
-                static_image_mode=True,
-                max_num_faces=5,
-                min_detection_confidence=0.5
-            )
-        except:
-            self.mp_face_mesh = None
-            print("MediaPipe face mesh not available")
-
-        self.model = None
+class DeepfakeDetectorAdvanced:
+    """
+    Advanced Deepfake Detector using ensemble of pre-trained models
+    Supports loading existing .h5 model files and model switching
+    """
+    
+    def __init__(self, threshold: float = 0.65, models_dir: str = "models"):
+        """
+        Initialize the deepfake detector
+        
+        Args:
+            threshold: Confidence threshold for deepfake classification
+            models_dir: Directory containing model files
+        """
+        self.threshold = threshold
+        self.models_dir = models_dir
         self.ensemble_models = []
-        self.deepfake_threshold = 0.65
-        self.artifact_threshold = 0.5
-
-        self.load_or_create_models()
-        self.last_gc_time = time.time()
-
-    # ------------------------------------------------------------------
-    # Model loading / creation (FIXED)
-    # ------------------------------------------------------------------
-    def load_or_create_models(self):
-        """Load any existing models; create only those that are missing."""
-        model_paths = {
-            'cnn': 'models/deepfake_cnn.h5',
-            'mobilenet': 'models/deepfake_mobilenet.h5',
-            'artifact': 'models/deepfake_artifact.h5'
-        }
-
-        # Load or create CNN model (primary)
-        if os.path.exists(model_paths['cnn']):
-            try:
-                self.model = tf.keras.models.load_model(model_paths['cnn'])
-                print("✅ Loaded CNN model from", model_paths['cnn'])
-            except Exception as e:
-                print(f"⚠️ Failed to load CNN model: {e}. Creating new one.")
-                self.model = self.create_cnn_model()
-        else:
-            print("⚠️ CNN model not found. Creating new one.")
-            self.model = self.create_cnn_model()
-
-        # Load or create MobileNet model (ensemble)
-        if os.path.exists(model_paths['mobilenet']):
-            try:
-                self.ensemble_models.append(tf.keras.models.load_model(model_paths['mobilenet']))
-                print("✅ Loaded MobileNet model")
-            except Exception as e:
-                print(f"⚠️ Failed to load MobileNet model: {e}. Creating new one.")
-                self.ensemble_models.append(self.create_mobilenet_model())
-        else:
-            print("⚠️ MobileNet model not found. Creating new one.")
-            self.ensemble_models.append(self.create_mobilenet_model())
-
-        # Load or create artifact model (ensemble)
-        if os.path.exists(model_paths['artifact']):
-            try:
-                self.ensemble_models.append(tf.keras.models.load_model(model_paths['artifact']))
-                print("✅ Loaded artifact model")
-            except Exception as e:
-                print(f"⚠️ Failed to load artifact model: {e}. Creating new one.")
-                self.ensemble_models.append(self.create_artifact_model())
-        else:
-            print("⚠️ Artifact model not found. Creating new one.")
-            self.ensemble_models.append(self.create_artifact_model())
-
-    def create_cnn_model(self):
-        """Create optimized CNN model - compatible with training script."""
-        model = models.Sequential([
-            layers.Input(shape=self.input_shape),
-            layers.Conv2D(32, (3, 3), activation='relu', padding='same'),
-            layers.BatchNormalization(),
-            layers.MaxPooling2D(2, 2),
-            layers.Dropout(0.2),
-
-            layers.Conv2D(64, (3, 3), activation='relu', padding='same'),
-            layers.BatchNormalization(),
-            layers.MaxPooling2D(2, 2),
-            layers.Dropout(0.25),
-
-            layers.Conv2D(128, (3, 3), activation='relu', padding='same'),
-            layers.BatchNormalization(),
-            layers.MaxPooling2D(2, 2),
-            layers.Dropout(0.3),
-
-            layers.Conv2D(256, (3, 3), activation='relu', padding='same'),
-            layers.BatchNormalization(),
-            layers.GlobalAveragePooling2D(),
-            layers.Dropout(0.4),
-
-            layers.Dense(128, activation='relu'),
-            layers.Dropout(0.3),
-            layers.Dense(1, activation='sigmoid')
-        ])
-        model.compile(
-            optimizer=tf.keras.optimizers.Adam(learning_rate=0.001),
-            loss='binary_crossentropy',
-            metrics=['accuracy', tf.keras.metrics.Precision(), tf.keras.metrics.Recall()]
+        self.model_names = []
+        self.model_paths = []
+        self.input_size = (224, 224)
+        self.model_weights = {}  # Dictionary to store custom weights for ensemble
+        self.face_cascade = cv2.CascadeClassifier(
+            cv2.data.haarcascades + 'haarcascade_frontalface_default.xml'
         )
-        return model
-
-    def create_mobilenet_model(self):
-        """Create MobileNetV2 based model."""
-        base_model = applications.MobileNetV2(
-            input_shape=self.input_shape,
-            include_top=False,
-            weights='imagenet'
-        )
-        base_model.trainable = False
-        model = models.Sequential([
-            base_model,
-            layers.GlobalAveragePooling2D(),
-            layers.Dropout(0.5),
-            layers.Dense(128, activation='relu'),
-            layers.Dense(1, activation='sigmoid')
-        ])
-        model.compile(optimizer='adam', loss='binary_crossentropy', metrics=['accuracy'])
-        return model
-
-    def create_artifact_model(self):
-        """Model specialized in detecting compression artifacts."""
-        model = models.Sequential([
-            layers.Input(shape=(112, 112, 3)),
-            layers.Conv2D(32, (7, 7), activation='relu', padding='same'),
-            layers.BatchNormalization(),
-            layers.MaxPooling2D(2, 2),
-
-            layers.Conv2D(64, (5, 5), activation='relu', padding='same'),
-            layers.BatchNormalization(),
-            layers.MaxPooling2D(2, 2),
-
-            layers.Conv2D(128, (3, 3), activation='relu', padding='same'),
-            layers.BatchNormalization(),
-            layers.GlobalAveragePooling2D(),
-
-            layers.Dense(64, activation='relu'),
-            layers.Dropout(0.4),
-            layers.Dense(1, activation='sigmoid')
-        ])
-        model.compile(optimizer='adam', loss='binary_crossentropy', metrics=['accuracy'])
-        return model
-
-    # ------------------------------------------------------------------
-    # Face detection and analysis
-    # ------------------------------------------------------------------
-    def detect_faces_advanced(self, image):
-        faces_data = []
-        # MTCNN
+        
+        # Load your existing models
+        self._load_existing_models()
+        
+        # If no models loaded, fallback to pre-trained
+        if len(self.ensemble_models) == 0:
+            logger.warning("No existing models found. Loading pre-trained models as fallback.")
+            self._load_pretrained_models()
+    
+    def _load_existing_models(self):
+        """Load your existing .h5 model files"""
         try:
-            if isinstance(image, np.ndarray):
-                if image.shape[-1] == 3:
-                    pil_image = Image.fromarray(cv2.cvtColor(image, cv2.COLOR_BGR2RGB))
-                else:
-                    pil_image = Image.fromarray(image)
-            boxes, probs = self.mtcnn.detect(pil_image, landmarks=False)
-            if boxes is not None:
-                for i, (box, prob) in enumerate(zip(boxes, probs)):
-                    if prob > 0.9:
-                        x1, y1, x2, y2 = [int(b) for b in box]
-                        x1, y1 = max(0, x1), max(0, y1)
-                        x2, y2 = min(image.shape[1], x2), min(image.shape[0], y2)
-                        face = image[y1:y2, x1:x2]
-                        if face.size > 0:
-                            faces_data.append({
-                                'bbox': (x1, y1, x2, y2),
-                                'confidence': prob,
-                                'face': face,
-                                'method': 'mtcnn'
-                            })
+            # Look for all .h5 files in the models directory
+            h5_files = glob.glob(os.path.join(self.models_dir, "*.h5"))
+            
+            if not h5_files:
+                logger.info("No .h5 files found in models directory")
+                return
+            
+            logger.info(f"Found {len(h5_files)} .h5 model files")
+            
+            for model_path in h5_files:
+                try:
+                    model_name = os.path.basename(model_path).replace('.h5', '')
+                    logger.info(f"Loading model: {model_name} from {model_path}")
+                    
+                    # Load the model
+                    model = load_model(model_path, compile=False)
+                    
+                    self.ensemble_models.append(model)
+                    self.model_names.append(model_name)
+                    self.model_paths.append(model_path)
+                    
+                    logger.info(f"Successfully loaded {model_name}")
+                    
+                except Exception as e:
+                    logger.error(f"Error loading model {model_path}: {e}")
+            
+            logger.info(f"Loaded {len(self.ensemble_models)} existing models successfully")
+            
         except Exception as e:
-            print(f"MTCNN error: {e}")
-
-        # MediaPipe fallback
-        if len(faces_data) == 0 and self.mp_face_mesh is not None:
-            try:
-                rgb_image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
-                results = self.mp_face_mesh.process(rgb_image)
-                if results.multi_face_landmarks:
-                    h, w = image.shape[:2]
-                    for landmarks in results.multi_face_landmarks:
-                        x_coords = [lm.x for lm in landmarks.landmark]
-                        y_coords = [lm.y for lm in landmarks.landmark]
-                        x1 = int(min(x_coords) * w) - 20
-                        y1 = int(min(y_coords) * h) - 20
-                        x2 = int(max(x_coords) * w) + 20
-                        y2 = int(max(y_coords) * h) + 20
-                        x1, y1 = max(0, x1), max(0, y1)
-                        x2, y2 = min(w, x2), min(h, y2)
-                        face = image[y1:y2, x1:x2]
-                        if face.size > 0:
-                            faces_data.append({
-                                'bbox': (x1, y1, x2, y2),
-                                'confidence': 0.95,
-                                'face': face,
-                                'method': 'mediapipe'
-                            })
-            except Exception as e:
-                print(f"MediaPipe error: {e}")
-        return faces_data
-
-    def analyze_face_consistency(self, face):
-        artifacts = {}
-        if len(face.shape) == 3:
-            gray = cv2.cvtColor(face, cv2.COLOR_RGB2GRAY)
-        else:
-            gray = face
-
-        # Sharpness
-        laplacian_var = cv2.Laplacian(gray, cv2.CV_64F).var()
-        artifacts['sharpness'] = min(laplacian_var / 500, 1.0)
-
-        # Color uniformity
-        if len(face.shape) == 3:
-            lab = cv2.cvtColor(face, cv2.COLOR_RGB2LAB)
-            color_uniformity = np.std(lab.reshape(-1, 3), axis=0).mean() / 128
-            artifacts['color_uniformity'] = min(color_uniformity, 1.0)
-
-        # Compression artifacts (DCT)
-        gray_float = gray.astype(np.float32)
-        dct_coeffs = cv2.dct(gray_float)
-        high_freq_energy = np.mean(np.abs(dct_coeffs[50:, 50:]))
-        artifacts['compression_artifacts'] = min(high_freq_energy / 100, 1.0)
-
-        # Edge density
-        edges = cv2.Canny(gray, 50, 150)
-        artifacts['edge_density'] = np.sum(edges > 0) / edges.size
-
-        # Noise level
-        noise = cv2.fastNlMeansDenoising(gray, None, 10, 7, 21)
-        noise_diff = cv2.absdiff(gray, noise)
-        artifacts['noise_level'] = np.mean(noise_diff) / 255
-
-        artifact_score = (
-            (1 - artifacts['sharpness']) * 0.25 +
-            artifacts.get('color_uniformity', 0.5) * 0.2 +
-            artifacts['compression_artifacts'] * 0.25 +
-            artifacts['edge_density'] * 0.15 +
-            artifacts['noise_level'] * 0.15
+            logger.error(f"Error scanning models directory: {e}")
+    
+    def _load_pretrained_models(self):
+        """Load pre-trained models as fallback"""
+        try:
+            # Load ResNet50
+            logger.info("Loading ResNet50...")
+            resnet = ResNet50(weights='imagenet', include_top=False, pooling='avg')
+            self.ensemble_models.append(resnet)
+            self.model_names.append('ResNet50')
+            self.model_paths.append('pretrained')
+            
+            # Load EfficientNet
+            logger.info("Loading EfficientNet...")
+            efficientnet = EfficientNetB0(weights='imagenet', include_top=False, pooling='avg')
+            self.ensemble_models.append(efficientnet)
+            self.model_names.append('EfficientNet')
+            self.model_paths.append('pretrained')
+            
+            # Load Xception
+            logger.info("Loading Xception...")
+            xception = Xception(weights='imagenet', include_top=False, pooling='avg')
+            self.ensemble_models.append(xception)
+            self.model_names.append('Xception')
+            self.model_paths.append('pretrained')
+            
+            logger.info(f"Loaded {len(self.ensemble_models)} pre-trained models successfully")
+            
+        except Exception as e:
+            logger.error(f"Error loading pre-trained models: {e}")
+            self._load_fallback_models()
+    
+    def _load_fallback_models(self):
+        """Load fallback models if primary models fail"""
+        try:
+            from tensorflow.keras.applications import MobileNetV2
+            mobilenet = MobileNetV2(weights='imagenet', include_top=False, pooling='avg')
+            self.ensemble_models.append(mobilenet)
+            self.model_names.append('MobileNetV2')
+            self.model_paths.append('pretrained')
+            logger.info("Loaded MobileNetV2 as fallback")
+        except Exception as e:
+            logger.error(f"Failed to load fallback models: {e}")
+    
+    def set_model_weights(self, weights: Dict[str, float]):
+        """
+        Set custom weights for ensemble models
+        
+        Args:
+            weights: Dictionary mapping model names to weights
+        """
+        self.model_weights = weights
+        logger.info(f"Model weights updated: {weights}")
+    
+    def preprocess_for_model(self, image_array: np.ndarray, model_name: str) -> np.ndarray:
+        """
+        Preprocess image for specific model based on its expected input
+        
+        Args:
+            image_array: Input image array
+            model_name: Name of the model
+            
+        Returns:
+            Preprocessed image batch
+        """
+        # Resize image
+        img_resized = cv2.resize(image_array, self.input_size)
+        
+        # Convert to RGB if needed
+        if len(img_resized.shape) == 2:
+            img_resized = cv2.cvtColor(img_resized, cv2.COLOR_GRAY2RGB)
+        elif img_resized.shape[2] == 4:
+            img_resized = cv2.cvtColor(img_resized, cv2.COLOR_RGBA2RGB)
+        
+        # Convert to float32 and normalize to [0,1]
+        img_normalized = img_resized.astype(np.float32) / 255.0
+        
+        # Add batch dimension
+        img_batch = np.expand_dims(img_normalized, axis=0)
+        
+        return img_batch
+    
+    def predict_with_model(self, model: Any, image_batch: np.ndarray) -> float:
+        """
+        Get prediction from a model
+        
+        Args:
+            model: Loaded Keras model
+            image_batch: Preprocessed image batch
+            
+        Returns:
+            Deepfake probability score
+        """
+        try:
+            # Get prediction
+            pred = model.predict(image_batch, verbose=0)
+            
+            # Handle different output shapes
+            if isinstance(pred, list):
+                pred = pred[0]
+            
+            # Flatten if needed
+            if len(pred.shape) > 2:
+                pred = pred.flatten()
+            
+            # Get the probability (assuming binary classification)
+            if pred.shape[-1] == 2:  # Binary classification with 2 outputs
+                score = float(pred[0][1])  # Probability of fake
+            elif len(pred) == 1:  # Single output
+                score = float(pred[0])
+            else:
+                # Take mean as score
+                score = float(np.mean(pred))
+            
+            return min(max(score, 0.0), 1.0)  # Clamp to [0,1]
+            
+        except Exception as e:
+            logger.error(f"Error in model prediction: {e}")
+            return 0.5  # Return neutral score on error
+    
+    def detect_faces(self, image_array: np.ndarray) -> List[Tuple[int, int, int, int]]:
+        """
+        Detect faces in image
+        
+        Args:
+            image_array: Input image
+            
+        Returns:
+            List of face bounding boxes (x, y, w, h)
+        """
+        gray = cv2.cvtColor(image_array, cv2.COLOR_BGR2GRAY)
+        faces = self.face_cascade.detectMultiScale(
+            gray,
+            scaleFactor=1.1,
+            minNeighbors=5,
+            minSize=(30, 30)
         )
-        return artifact_score, artifacts
-
-    def analyze_frequency_domain(self, image):
-        gray = cv2.cvtColor(image, cv2.COLOR_RGB2GRAY)
-        fft = np.fft.fft2(gray)
-        fft_shift = np.fft.fftshift(fft)
-        magnitude = np.log(np.abs(fft_shift) + 1)
-        h, w = magnitude.shape
-        ch, cw = h // 2, w // 2
-
-        low_freq = magnitude[ch-30:ch+30, cw-30:cw+30].mean()
-        mid_freq = magnitude[ch-60:ch+60, cw-60:cw+60].mean()
-        high_freq = magnitude.mean()
-        freq_ratio = (high_freq - low_freq) / (mid_freq + 1e-6)
-
-        return {
-            'low_freq': float(low_freq),
-            'mid_freq': float(mid_freq),
-            'high_freq': float(high_freq),
-            'freq_ratio': float(freq_ratio),
-            'suspicious_pattern': bool(freq_ratio < 0.5 or freq_ratio > 2.0)
-        }
-
-    # ------------------------------------------------------------------
-    # Main detection methods
-    # ------------------------------------------------------------------
-    def detect_deepfake_ensemble(self, image):
-        faces = self.detect_faces_advanced(image)
-        if len(faces) == 0:
+        return faces
+    
+    def detect_deepfake_ensemble(self, image_array: np.ndarray) -> Dict:
+        """
+        Detect if an image is a deepfake using ensemble of loaded models
+        
+        Args:
+            image_array: Input image array
+            
+        Returns:
+            Dictionary with detection results
+        """
+        try:
+            # Detect faces
+            faces = self.detect_faces(image_array)
+            face_count = len(faces)
+            
+            if face_count == 0:
+                return {
+                    'is_deepfake': False,
+                    'confidence': 0.0,
+                    'face_count': 0,
+                    'ensemble_score': 0.0,
+                    'consistency': 0.0,
+                    'message': 'No faces detected in image',
+                    'model_scores': {},
+                    'models_used': self.model_names
+                }
+            
+            # Preprocess image once
+            img_batch = self.preprocess_for_model(image_array, 'generic')
+            
+            # Get predictions from all models
+            model_scores = {}
+            valid_scores = []
+            
+            for i, model in enumerate(self.ensemble_models):
+                model_name = self.model_names[i]
+                try:
+                    score = self.predict_with_model(model, img_batch)
+                    model_scores[model_name] = float(score)
+                    valid_scores.append(score)
+                except Exception as e:
+                    logger.error(f"Error with model {model_name}: {e}")
+                    model_scores[model_name] = 0.5  # Neutral score on error
+            
+            if not valid_scores:
+                return {
+                    'is_deepfake': False,
+                    'confidence': 0.0,
+                    'face_count': face_count,
+                    'ensemble_score': 0.0,
+                    'consistency': 0.0,
+                    'message': 'All models failed to predict',
+                    'model_scores': model_scores,
+                    'models_used': self.model_names
+                }
+            
+            # Calculate ensemble score (weighted average if weights are set)
+            if self.model_weights and len(self.model_weights) > 0:
+                # Calculate weighted average
+                weighted_sum = 0
+                total_weight = 0
+                for model_name, score in model_scores.items():
+                    weight = self.model_weights.get(model_name, 1.0)
+                    weighted_sum += score * weight
+                    total_weight += weight
+                
+                ensemble_score = weighted_sum / total_weight if total_weight > 0 else np.mean(valid_scores)
+            else:
+                # Default to simple average
+                ensemble_score = np.mean(valid_scores)
+            
+            # Calculate consistency between models (lower std dev = more consistent)
+            consistency = 1.0 - np.std(valid_scores) if len(valid_scores) > 1 else 1.0
+            
+            # Final decision
+            is_deepfake = ensemble_score > self.threshold
+            confidence = ensemble_score * 100 if is_deepfake else (1 - ensemble_score) * 100
+            
+            result = {
+                'is_deepfake': is_deepfake,
+                'confidence': float(confidence),
+                'face_count': face_count,
+                'ensemble_score': float(ensemble_score),
+                'consistency': float(consistency),
+                'model_scores': model_scores,
+                'models_used': self.model_names,
+                'message': self._get_message(is_deepfake, confidence, face_count, ensemble_score)
+            }
+            
+            return result
+            
+        except Exception as e:
+            logger.error(f"Error in deepfake detection: {e}")
             return {
                 'is_deepfake': False,
-                'confidence': 0,
-                'message': 'No face detected',
-                'face_count': 0
+                'confidence': 0.0,
+                'face_count': 0,
+                'ensemble_score': 0.0,
+                'consistency': 0.0,
+                'message': f'Error during analysis: {str(e)}',
+                'model_scores': {},
+                'models_used': self.model_names
             }
-
-        all_preds = []
-        face_analyses = []
-
-        for face_data in faces:
-            face = face_data['face']
-            face_resized = cv2.resize(face, (self.input_size, self.input_size))
-            face_input = np.expand_dims(face_resized / 255.0, axis=0)
-
-            predictions = []
-            if self.model is not None:
-                try:
-                    pred1 = self.model.predict(face_input, verbose=0)[0][0]
-                    predictions.append(float(pred1))
-                except:
-                    pass
-
-            if len(self.ensemble_models) > 0:
-                try:
-                    pred2 = self.ensemble_models[0].predict(face_input, verbose=0)[0][0]
-                    predictions.append(float(pred2))
-                except:
-                    pass
-
-            if len(self.ensemble_models) > 1:
-                try:
-                    face_small = cv2.resize(face, (112, 112))
-                    face_small_input = np.expand_dims(face_small / 255.0, axis=0)
-                    pred3 = self.ensemble_models[1].predict(face_small_input, verbose=0)[0][0]
-                    predictions.append(float(pred3))
-                except:
-                    pass
-
-            artifact_score, artifacts = self.analyze_face_consistency(face)
-            freq_analysis = self.analyze_frequency_domain(face)
-            avg_pred = np.mean(predictions) if predictions else 0.5
-
-            weighted = avg_pred * 0.5 + artifact_score * 0.3 + (1 if freq_analysis['suspicious_pattern'] else 0) * 0.2
-            all_preds.append(weighted)
-
-            face_analyses.append({
-                'bbox': face_data['bbox'],
-                'confidence': float(face_data['confidence']),
-                'artifact_score': float(artifact_score),
-                'artifacts': artifacts,
-                'freq_analysis': freq_analysis,
-                'model_score': float(avg_pred),
-                'method': face_data.get('method', 'unknown')
-            })
-
-        final_score = float(np.mean(all_preds))
-        is_df = final_score > self.deepfake_threshold
-        if len(all_preds) > 1:
-            consistency = 1 - float(np.std(all_preds))
+    
+    def detect_with_single_model(self, image_array: np.ndarray, model_name: str) -> Dict:
+        """
+        Detect deepfake using a single specific model
+        
+        Args:
+            image_array: Input image array
+            model_name: Name of the model to use
+            
+        Returns:
+            Dictionary with detection results
+        """
+        try:
+            # Find model index
+            if model_name not in self.model_names:
+                return {
+                    'is_deepfake': False,
+                    'confidence': 0.0,
+                    'face_count': 0,
+                    'ensemble_score': 0.0,
+                    'consistency': 1.0,
+                    'message': f'Model {model_name} not found',
+                    'model_scores': {},
+                    'models_used': [model_name]
+                }
+            
+            model_idx = self.model_names.index(model_name)
+            model = self.ensemble_models[model_idx]
+            
+            # Detect faces
+            faces = self.detect_faces(image_array)
+            face_count = len(faces)
+            
+            if face_count == 0:
+                return {
+                    'is_deepfake': False,
+                    'confidence': 0.0,
+                    'face_count': 0,
+                    'ensemble_score': 0.0,
+                    'consistency': 1.0,
+                    'message': 'No faces detected in image',
+                    'model_used': model_name,
+                    'models_used': [model_name]
+                }
+            
+            # Preprocess and predict
+            img_batch = self.preprocess_for_model(image_array, model_name)
+            score = self.predict_with_model(model, img_batch)
+            
+            # Final decision
+            is_deepfake = score > self.threshold
+            confidence = score * 100 if is_deepfake else (1 - score) * 100
+            
+            result = {
+                'is_deepfake': is_deepfake,
+                'confidence': float(confidence),
+                'face_count': face_count,
+                'ensemble_score': float(score),
+                'consistency': 1.0,
+                'model_scores': {model_name: float(score)},
+                'model_used': model_name,
+                'models_used': [model_name],
+                'message': self._get_message(is_deepfake, confidence, face_count, score)
+            }
+            
+            return result
+            
+        except Exception as e:
+            logger.error(f"Error in single model detection: {e}")
+            return {
+                'is_deepfake': False,
+                'confidence': 0.0,
+                'face_count': 0,
+                'ensemble_score': 0.0,
+                'consistency': 1.0,
+                'message': f'Error during analysis: {str(e)}',
+                'model_used': model_name,
+                'models_used': [model_name] if model_name else []
+            }
+    
+    def detect_deepfake_video_advanced(self, video_path: str, sample_rate: int = 30) -> Dict:
+        """
+        Analyze video for deepfakes using ensemble
+        
+        Args:
+            video_path: Path to video file
+            sample_rate: Sample every Nth frame
+            
+        Returns:
+            Dictionary with video analysis results
+        """
+        try:
+            cap = cv2.VideoCapture(video_path)
+            if not cap.isOpened():
+                return {'error': 'Could not open video file'}
+            
+            frame_results = []
+            frame_count = 0
+            processed_frames = 0
+            
+            total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+            
+            while True:
+                ret, frame = cap.read()
+                if not ret:
+                    break
+                
+                if frame_count % sample_rate == 0:
+                    # Analyze frame with ensemble
+                    result = self.detect_deepfake_ensemble(frame)
+                    frame_results.append({
+                        'frame': frame_count,
+                        'is_deepfake': result['is_deepfake'],
+                        'confidence': result['confidence'],
+                        'ensemble_score': result['ensemble_score']
+                    })
+                    processed_frames += 1
+                
+                frame_count += 1
+            
+            cap.release()
+            
+            if not frame_results:
+                return {'error': 'No frames could be processed'}
+            
+            # Aggregate results
+            deepfake_frames = sum(1 for r in frame_results if r['is_deepfake'])
+            avg_confidence = np.mean([r['confidence'] for r in frame_results])
+            avg_ensemble_score = np.mean([r['ensemble_score'] for r in frame_results])
+            
+            # Determine video authenticity
+            deepfake_ratio = deepfake_frames / len(frame_results)
+            is_deepfake = deepfake_ratio > 0.3  # Threshold for video
+            
+            return {
+                'is_deepfake': is_deepfake,
+                'confidence': float(avg_confidence),
+                'deepfake_frames': deepfake_frames,
+                'total_frames_analyzed': len(frame_results),
+                'deepfake_ratio': float(deepfake_ratio),
+                'avg_ensemble_score': float(avg_ensemble_score),
+                'frame_results': frame_results[:10],  # Return first 10 for preview
+                'models_used': self.model_names,
+                'message': self._get_video_message(is_deepfake, deepfake_ratio, avg_confidence)
+            }
+            
+        except Exception as e:
+            logger.error(f"Error in video analysis: {e}")
+            return {'error': str(e)}
+    
+    def detect_video_with_single_model(self, video_path: str, model_name: str, sample_rate: int = 30) -> Dict:
+        """
+        Analyze video using a single specific model
+        
+        Args:
+            video_path: Path to video file
+            model_name: Name of the model to use
+            sample_rate: Sample every Nth frame
+            
+        Returns:
+            Dictionary with video analysis results
+        """
+        try:
+            cap = cv2.VideoCapture(video_path)
+            if not cap.isOpened():
+                return {'error': 'Could not open video file'}
+            
+            frame_results = []
+            frame_count = 0
+            processed_frames = 0
+            
+            while True:
+                ret, frame = cap.read()
+                if not ret:
+                    break
+                
+                if frame_count % sample_rate == 0:
+                    # Analyze frame with single model
+                    result = self.detect_with_single_model(frame, model_name)
+                    frame_results.append({
+                        'frame': frame_count,
+                        'is_deepfake': result['is_deepfake'],
+                        'confidence': result['confidence'],
+                        'ensemble_score': result['ensemble_score']
+                    })
+                    processed_frames += 1
+                
+                frame_count += 1
+            
+            cap.release()
+            
+            if not frame_results:
+                return {'error': 'No frames could be processed'}
+            
+            # Aggregate results
+            deepfake_frames = sum(1 for r in frame_results if r['is_deepfake'])
+            avg_confidence = np.mean([r['confidence'] for r in frame_results])
+            avg_ensemble_score = np.mean([r['ensemble_score'] for r in frame_results])
+            
+            deepfake_ratio = deepfake_frames / len(frame_results)
+            is_deepfake = deepfake_ratio > 0.3
+            
+            return {
+                'is_deepfake': is_deepfake,
+                'confidence': float(avg_confidence),
+                'deepfake_frames': deepfake_frames,
+                'total_frames_analyzed': len(frame_results),
+                'deepfake_ratio': float(deepfake_ratio),
+                'avg_ensemble_score': float(avg_ensemble_score),
+                'frame_results': frame_results[:10],
+                'model_used': model_name,
+                'models_used': [model_name],
+                'message': self._get_video_message(is_deepfake, deepfake_ratio, avg_confidence)
+            }
+            
+        except Exception as e:
+            logger.error(f"Error in video analysis: {e}")
+            return {'error': str(e)}
+    
+    def get_model_info(self) -> Dict:
+        """
+        Get information about loaded models
+        
+        Returns:
+            Dictionary with model information
+        """
+        return {
+            'total_models': len(self.ensemble_models),
+            'model_names': self.model_names,
+            'model_paths': self.model_paths,
+            'threshold': self.threshold,
+            'weights': self.model_weights
+        }
+    
+    def _get_message(self, is_deepfake: bool, confidence: float, face_count: int, ensemble_score: float) -> str:
+        """Generate user-friendly message"""
+        if is_deepfake:
+            if confidence > 80:
+                return f"🚨 High confidence deepfake detected! ({confidence:.1f}%) - {face_count} face(s) analyzed"
+            else:
+                return f"⚠️ Potential deepfake detected ({confidence:.1f}%) - Further analysis recommended"
         else:
-            consistency = 1.0
+            if confidence < 30:
+                return f"✅ Image appears authentic ({(100-confidence):.1f}% confidence) - {face_count} face(s) analyzed"
+            else:
+                return f"ℹ️ No clear signs of manipulation ({(100-confidence):.1f}% confidence)"
+    
+    def _get_video_message(self, is_deepfake: bool, ratio: float, confidence: float) -> str:
+        """Generate message for video analysis"""
+        if is_deepfake:
+            return f"🚨 Deepfake detected in {ratio*100:.1f}% of frames (avg confidence: {confidence:.1f}%)"
+        else:
+            return f"✅ Video appears authentic (deepfake in only {ratio*100:.1f}% of frames)"
 
-        confidence = final_score * 100 * consistency
-
-        return {
-            'is_deepfake': bool(is_df),
-            'confidence': float(min(confidence, 100)),
-            'face_count': len(faces),
-            'face_analyses': face_analyses,
-            'ensemble_score': float(final_score),
-            'consistency': float(consistency),
-            'message': 'Deepfake detected with high confidence' if is_df and confidence > 80
-                      else 'Likely authentic' if not is_df and confidence < 30
-                      else 'Suspicious - further analysis recommended'
-        }
-
-    def detect_deepfake_video_advanced(self, video_path):
-        cap = cv2.VideoCapture(video_path)
-        fps = cap.get(cv2.CAP_PROP_FPS)
-        frame_count = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
-        duration = frame_count / fps if fps > 0 else 0
-
-        frame_results = []
-        temporal_scores = []
-
-        for i in range(0, frame_count, 30):
-            cap.set(cv2.CAP_PROP_POS_FRAMES, i)
-            ret, frame = cap.read()
-            if ret:
-                res = self.detect_deepfake_ensemble(frame)
-                frame_results.append({
-                    'frame_index': i,
-                    'is_deepfake': res['is_deepfake'],
-                    'confidence': res['confidence'],
-                    'face_count': res['face_count']
-                })
-                temporal_scores.append(res['confidence'] / 100)
-
-        cap.release()
-        if len(temporal_scores) == 0:
-            return {
-                'is_deepfake': False,
-                'confidence': 0,
-                'message': 'Could not analyze video',
-                'frames_analyzed': 0
-            }
-
-        temporal_mean = float(np.mean(temporal_scores))
-        temporal_std = float(np.std(temporal_scores))
-        is_df = temporal_mean > self.deepfake_threshold
-        confidence = temporal_mean * 100 * (1 - temporal_std)
-
-        return {
-            'is_deepfake': bool(is_df),
-            'confidence': float(min(confidence, 100)),
-            'frames_analyzed': len(frame_results),
-            'temporal_consistency': float((1 - temporal_std) * 100),
-            'frame_results': frame_results[:10],
-            'message': 'Deepfake detected in video' if is_df else 'Video appears authentic',
-            'duration': float(duration)
-        }
-
-# Global instance for easy import
-deepfake_detector = AdvancedDeepfakeDetector()
+# Create singleton instance with models directory pointing to your models folder
+deepfake_detector = DeepfakeDetectorAdvanced(models_dir="models")
