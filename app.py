@@ -1,4 +1,4 @@
-# app.py (updated with enhanced admin tools including sentiment fine-tuning)
+# app.py (fully integrated with enhanced Fake News Detection and fixed Sentiment Analysis)
 
 import streamlit as st
 import numpy as np
@@ -56,16 +56,9 @@ if VIZ_AVAILABLE:
 # ---------- Initialize fake news detector ----------
 fake_news_detector = FakeNewsDetector(use_transformer=True)
 
-# Check if model exists and load it
+# Check if model exists and load it - UPDATED to use new auto-loading
 model_path = 'models/fake_news/'
-if os.path.exists(os.path.join(model_path, 'pytorch_model.bin')):
-    try:
-        fake_news_detector.load_model(model_path)
-        st.session_state['fake_news_loaded'] = True
-    except:
-        st.session_state['fake_news_loaded'] = False
-else:
-    st.session_state['fake_news_loaded'] = False
+st.session_state['fake_news_loaded'] = fake_news_detector.is_trained
 
 # ---------- Page config ----------
 st.set_page_config(page_title="TruthGuard AI", page_icon="🛡️", layout="wide")
@@ -102,8 +95,14 @@ if 'batch_results' not in st.session_state:
     st.session_state.batch_results = None
 if 'aspect_text' not in st.session_state:
     st.session_state.aspect_text = ""
+
+# Initialize session state for sentiment text input - FIXED: Don't set value here
 if 'sentiment_text_input' not in st.session_state:
     st.session_state.sentiment_text_input = ""
+
+# Initialize session state for fake news text input
+if 'fn_text' not in st.session_state:
+    st.session_state.fn_text = ""
 
 # Initialize session state for deepfake model selection
 if 'selected_df_model' not in st.session_state:
@@ -111,123 +110,278 @@ if 'selected_df_model' not in st.session_state:
 if 'df_model_weights' not in st.session_state:
     st.session_state.df_model_weights = {}
 
+# Initialize session state for fake news model selection
+if 'selected_fn_model' not in st.session_state:
+    st.session_state.selected_fn_model = None
+
+# Initialize session state for clear flags
+if 'clear_sentiment' not in st.session_state:
+    st.session_state.clear_sentiment = False
+if 'clear_fn' not in st.session_state:
+    st.session_state.clear_fn = False
+
 # ---------- Custom CSS (enhanced) ----------
 st.markdown("""
 <style>
+    /* Import Google Fonts */
+    @import url('https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700;800&display=swap');
+    
+    /* Global Font Change */
+    html, body, [class*="css"] {
+        font-family: 'Outfit', sans-serif !important;
+        color: #f8fafc !important; /* Update global text to light color */
+    }
+
+    /* General Dark/Light Background Tweaks for Premium Feel */
+    .stApp {
+        background-color: #0f172a; /* Dark background */
+    }
+    
+    /* Headers */
     .main-header {
-        font-size: 3rem;
+        font-size: 3.5rem;
         font-weight: 800;
-        background: linear-gradient(45deg, #4a90e2, #7c3aed);
+        background: linear-gradient(135deg, #60a5fa, #a78bfa, #f472b6); /* Lighter gradient for dark bg */
         -webkit-background-clip: text;
         -webkit-text-fill-color: transparent;
         text-align: center;
-        margin-bottom: 1rem;
+        margin-bottom: 0.5rem;
+        letter-spacing: -1px;
     }
     .sub-header {
-        font-size: 1.5rem;
-        color: #666;
+        font-size: 1.4rem;
+        color: #cbd5e1; /* Lighter slate for subheader */
         text-align: center;
-        margin-bottom: 2rem;
+        margin-bottom: 2.5rem;
+        font-weight: 400;
+        letter-spacing: 0.5px;
     }
+
+    /* Cards & Containers - Glassmorphism & Shadow */
     .metric-card {
-        background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-        padding: 1.5rem;
-        border-radius: 10px;
+        background: linear-gradient(135deg, #4f46e5 0%, #7c3aed 100%);
+        padding: 1.8rem;
+        border-radius: 16px;
         color: white;
         text-align: center;
-        box-shadow: 0 4px 6px rgba(0,0,0,0.1);
+        box-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.4);
+        transition: transform 0.3s cubic-bezier(0.4, 0, 0.2, 1), box-shadow 0.3s ease;
+        border: 1px solid rgba(255, 255, 255, 0.1);
     }
+    .metric-card:hover {
+        transform: translateY(-5px);
+        box-shadow: 0 20px 25px -5px rgba(0, 0, 0, 0.5);
+    }
+
+    /* Results styling with glowing and pulsing effects */
     .result-safe {
-        background: linear-gradient(135deg, #10b981 0%, #059669 100%);
-        padding: 2rem;
-        border-radius: 15px;
+        background: linear-gradient(135deg, #059669 0%, #10b981 100%);
+        padding: 2.5rem;
+        border-radius: 20px;
         color: white;
         text-align: center;
-        font-size: 1.5rem;
-        animation: pulse 2s infinite;
+        font-size: 1.8rem;
+        font-weight: 700;
+        box-shadow: 0 0 20px rgba(16, 185, 129, 0.4);
+        border: 1px solid rgba(255,255,255,0.2);
+        animation: pulse-green 3s infinite;
     }
     .result-fake {
-        background: linear-gradient(135deg, #ef4444 0%, #dc2626 100%);
-        padding: 2rem;
-        border-radius: 15px;
+        background: linear-gradient(135deg, #b91c1c 0%, #ef4444 100%);
+        padding: 2.5rem;
+        border-radius: 20px;
         color: white;
         text-align: center;
-        font-size: 1.5rem;
-        animation: pulse 2s infinite;
+        font-size: 1.8rem;
+        font-weight: 700;
+        box-shadow: 0 0 20px rgba(239, 68, 68, 0.4);
+        border: 1px solid rgba(255,255,255,0.2);
+        animation: pulse-red 3s infinite;
     }
     .result-suspicious {
-        background: linear-gradient(135deg, #f59e0b 0%, #d97706 100%);
-        padding: 2rem;
-        border-radius: 15px;
+        background: linear-gradient(135deg, #d97706 0%, #f59e0b 100%);
+        padding: 2.5rem;
+        border-radius: 20px;
         color: white;
         text-align: center;
-        font-size: 1.5rem;
-        animation: pulse 2s infinite;
+        font-size: 1.8rem;
+        font-weight: 700;
+        box-shadow: 0 0 20px rgba(245, 158, 11, 0.4);
+        border: 1px solid rgba(255,255,255,0.2);
+        animation: pulse-orange 3s infinite;
     }
-    @keyframes pulse {
-        0% { transform: scale(1); }
-        50% { transform: scale(1.02); }
-        100% { transform: scale(1); }
+
+    /* Animations */
+    @keyframes pulse-green {
+        0% { transform: scale(1); box-shadow: 0 0 20px rgba(16, 185, 129, 0.4); }
+        50% { transform: scale(1.02); box-shadow: 0 0 35px rgba(16, 185, 129, 0.6); }
+        100% { transform: scale(1); box-shadow: 0 0 20px rgba(16, 185, 129, 0.4); }
     }
+    @keyframes pulse-red {
+        0% { transform: scale(1); box-shadow: 0 0 20px rgba(239, 68, 68, 0.4); }
+        50% { transform: scale(1.02); box-shadow: 0 0 35px rgba(239, 68, 68, 0.6); }
+        100% { transform: scale(1); box-shadow: 0 0 20px rgba(239, 68, 68, 0.4); }
+    }
+    @keyframes pulse-orange {
+        0% { transform: scale(1); box-shadow: 0 0 20px rgba(245, 158, 11, 0.4); }
+        50% { transform: scale(1.02); box-shadow: 0 0 35px rgba(245, 158, 11, 0.6); }
+        100% { transform: scale(1); box-shadow: 0 0 20px rgba(245, 158, 11, 0.4); }
+    }
+
+    /* Sidebar User Card */
     .sidebar-user-card {
-        background: white;
-        padding: 1rem;
-        border-radius: 10px;
-        box-shadow: 0 2px 5px rgba(0,0,0,0.05);
-        margin-bottom: 1rem;
-        border-left: 4px solid #4a90e2;
+        background: rgba(30, 41, 59, 0.8); /* Darker glass effect */
+        backdrop-filter: blur(10px);
+        padding: 1.2rem;
+        border-radius: 12px;
+        box-shadow: 0 4px 15px rgba(0,0,0,0.2);
+        margin-bottom: 1.5rem;
+        border-left: 5px solid #818cf8; /* Lighter indigo */
+        transition: transform 0.2s;
+    }
+    .sidebar-user-card:hover {
+        transform: translateX(5px);
     }
     .sidebar-user-card h4 {
         margin: 0;
-        color: #1e293b;
-        font-size: 1.1rem;
+        color: #f8fafc; /* Light text */
+        font-size: 1.2rem;
+        font-weight: 700;
     }
     .sidebar-user-card p {
-        margin: 0.2rem 0 0;
-        color: #64748b;
-        font-size: 0.9rem;
+        margin: 0.4rem 0 0;
+        color: #cbd5e1; /* Lighter slate text */
+        font-size: 0.95rem;
     }
-    .sidebar .stButton>button {
+
+    /* Streamlit Button Restyling */
+    div.stButton > button {
         width: 100%;
-        border-radius: 20px;
+        border-radius: 12px;
+        border: 1px solid rgba(255,255,255,0.1); /* Light border */
+        background: #1e293b; /* Dark slate background */
+        color: #f8fafc; /* Light text */
+        font-weight: 600;
+        padding: 0.6rem 1.2rem;
+        box-shadow: 0 2px 5px rgba(0,0,0,0.2);
+        transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+    }
+    div.stButton > button:hover {
+        background: #334155; /* Slightly lighter slate */
+        transform: translateY(-2px);
+        box-shadow: 0 8px 15px rgba(0,0,0,0.3);
+        color: #818cf8; /* Light indigo text on hover */
+        border-color: #6366f1;
+    }
+    div.stButton > button:active {
+        transform: translateY(0);
+    }
+    
+    /* Primary buttons (e.g., forms, analyzing) often get kind="primary" in standard Streamlit styling */
+    div.stButton > button[kind="primary"] {
+        background: linear-gradient(135deg, #6366f1 0%, #818cf8 100%); /* Adjusted primary gradient */
+        color: white;
         border: none;
-        background: white;
-        color: #1e293b;
-        box-shadow: 0 2px 4px rgba(0,0,0,0.05);
-        transition: all 0.2s;
+        box-shadow: 0 4px 14px 0 rgba(99, 102, 241, 0.39);
     }
-    .sidebar .stButton>button:hover {
-        background: #f1f5f9;
-        box-shadow: 0 4px 8px rgba(0,0,0,0.1);
+    div.stButton > button[kind="primary"]:hover {
+        background: linear-gradient(135deg, #4f46e5 0%, #6366f1 100%);
+        color: white;
+        box-shadow: 0 6px 20px rgba(99, 102, 241, 0.5);
     }
+
+    /* Container padding */
     .block-container {
-        padding-top: 2rem;
+        padding-top: 3rem;
+        padding-bottom: 3rem;
+        max-width: 1200px;
     }
+
+    /* Model Badges */
     .model-badge {
         display: inline-block;
-        padding: 0.25rem 0.5rem;
-        border-radius: 4px;
-        font-size: 0.8rem;
-        font-weight: 600;
-        margin-right: 0.5rem;
-    }
-    .model-badge-primary {
-        background: #4a90e2;
-        color: white;
-    }
-    .model-badge-ensemble {
-        background: #7c3aed;
-        color: white;
-    }
-    .model-badge-single {
-        background: #10b981;
-        color: white;
-    }
-    .weight-slider {
-        padding: 0.5rem;
-        background: #f8f9fa;
+        padding: 0.35rem 0.75rem;
         border-radius: 8px;
-        margin-bottom: 0.5rem;
+        font-size: 0.85rem;
+        font-weight: 700;
+        letter-spacing: 0.5px;
+        margin-right: 0.5rem;
+        text-transform: uppercase;
+        box-shadow: 0 2px 4px rgba(0,0,0,0.2);
+    }
+    .model-badge-primary { background: linear-gradient(135deg, #3b82f6, #60a5fa); color: white; }
+    .model-badge-ensemble { background: linear-gradient(135deg, #8b5cf6, #a78bfa); color: white; }
+    .model-badge-single { background: linear-gradient(135deg, #10b981, #34d399); color: white; }
+    .model-badge-transformer { background: linear-gradient(135deg, #f59e0b, #fbbf24); color: white; }
+    .model-badge-rf { background: linear-gradient(135deg, #10b981, #34d399); color: white; }
+
+    /* Weight Sliders container */
+    .weight-slider {
+        padding: 1rem;
+        background: #1e293b; /* Darker bg */
+        border-radius: 12px;
+        margin-bottom: 1rem;
+        box-shadow: 0 2px 10px rgba(0,0,0,0.2);
+        border: 1px solid #334155;
+        transition: box-shadow 0.3s ease;
+    }
+    .weight-slider:hover {
+        box-shadow: 0 4px 15px rgba(0,0,0,0.3);
+    }
+    
+    /* Expander Styling */
+    .streamlit-expanderHeader {
+        font-weight: 600;
+        font-size: 1.1rem;
+        color: #f8fafc; /* Light text */
+        background-color: #1e293b; /* Darker background */
+        border-radius: 8px;
+        padding: 0.5rem 1rem;
+        transition: all 0.2s;
+        border: 1px solid rgba(255, 255, 255, 0.1);
+    }
+    .streamlit-expanderHeader:hover {
+        background-color: #334155;
+        color: #818cf8; /* Hover color */
+    }
+    
+    /* Tabs styling */
+    .stTabs [data-baseweb="tab-list"] {
+        gap: 8px;
+        background-color: rgba(15, 23, 42, 0.5); /* Darker tab list bg */
+        padding: 5px;
+        border-radius: 12px;
+    }
+    .stTabs [data-baseweb="tab"] {
+        padding: 10px 20px;
+        border-radius: 8px;
+        font-weight: 600;
+        color: #94a3b8; /* Dimmer text for inactive tabs */
+        transition: all 0.3s;
+    }
+    .stTabs [data-baseweb="tab"]:hover {
+        color: #818cf8;
+        background: rgba(129, 140, 248, 0.1);
+    }
+    .stTabs [aria-selected="true"] {
+        background: #1e293b !important; /* Dark bg for selected tab */
+        box-shadow: 0 2px 8px rgba(0,0,0,0.2) !important;
+        color: #818cf8 !important; /* Indigo text for selected */
+        border-bottom: 3px solid #6366f1 !important;
+    }
+    
+    /* Inputs */
+    .stTextInput>div>div>input, .stTextArea>div>div>textarea {
+        border-radius: 10px;
+        border: 1px solid #334155; /* Darker border */
+        background-color: #0f172a; /* Darker input bg */
+        color: #f8fafc; /* Light text */
+        transition: all 0.3s;
+        box-shadow: inset 0 2px 4px rgba(0,0,0,0.2);
+    }
+    .stTextInput>div>div>input:focus, .stTextArea>div>div>textarea:focus {
+        border-color: #818cf8;
+        box-shadow: 0 0 0 2px rgba(129, 140, 248, 0.2);
     }
 </style>
 """, unsafe_allow_html=True)
@@ -316,10 +470,11 @@ with st.sidebar:
     st.markdown("### 🧭 Navigation")
     mode = st.radio(
         "Select Feature",
-        ["📸 Deepfake Detection", "📰 Fake News Detection", "😊 Sentiment Analysis"],
+        ["🏠 Home", "📸 Deepfake Detection", "📰 Fake News Detection", "😊 Sentiment Analysis"],
         label_visibility="collapsed"
     )
     mode_map = {
+        "🏠 Home": "Home",
         "📸 Deepfake Detection": "Deepfake Detection",
         "📰 Fake News Detection": "Fake News Detection",
         "😊 Sentiment Analysis": "Sentiment Analysis"
@@ -328,7 +483,7 @@ with st.sidebar:
     
     st.markdown("---")
     
-    # ========== ENHANCED ADMIN TOOLS SECTION WITH SENTIMENT FINE-TUNING ==========
+    # ========== ENHANCED ADMIN TOOLS SECTION ==========
     if st.session_state.role == "admin":
         with st.expander("🔧 Admin Tools", expanded=False):
             st.markdown("#### Train Models")
@@ -571,31 +726,47 @@ with st.sidebar:
             
             st.markdown("---")
             
-            # ===== FAKE NEWS TRAINING SECTION =====
+            # ===== UPDATED FAKE NEWS TRAINING SECTION =====
             st.markdown("##### 📰 Fake News Training")
             
-            # Original training buttons (keep for backward compatibility)
             col1, col2 = st.columns(2)
             with col1:
-                if st.button("🤖 Train Deepfake (Legacy)", use_container_width=True):
-                    st.info("Deepfake training started in background. Check console for progress.")
-                    subprocess.Popen(["python", "train_deepfake_batch_advanced.py"])
-            
+                if st.button("📊 Train Random Forest", use_container_width=True, key="train_rf"):
+                    cmd = [
+                        "python", "train_fakenews_simple.py", 
+                        "--dataset", "datasets/fake_news/all_fake_news_combined.csv",
+                        "--model-type", "random_forest",
+                        "--test-size", "0.2"
+                    ]
+                    st.info(f"Training started: {' '.join(cmd)}")
+                    subprocess.Popen(cmd, creationflags=subprocess.CREATE_NO_WINDOW if os.name == 'nt' else 0)
+                    st.success("✅ Random Forest training launched! This will take 5-15 minutes.")
+
             with col2:
-                if st.button("📊 Train Fake News (Traditional)", use_container_width=True):
-                    st.info("Fake news training started (traditional ML).")
-                    subprocess.Popen(["python", "train_fakenews.py", "--dataset", "datasets/fake_news/train.csv"])
-            
-            col1, col2 = st.columns(2)
-            with col1:
-                if st.button("🧠 Train Fake News (Transformer)", use_container_width=True):
-                    st.info("Fake news training started (transformer). This may take a while.")
-                    subprocess.Popen(["python", "train_fakenews.py", "--dataset", "datasets/fake_news/train.csv", "--transformer"])
-            
-            with col2:
-                if st.button("😶 Train Sentiment Model (Legacy)", use_container_width=True):
-                    st.info("Sentiment fine-tuning started.")
-                    subprocess.Popen(["python", "train_sentiment.py", "--dataset", "datasets/sentiment/train.csv"])
+                if st.button("🧠 Train Transformer", use_container_width=True, key="train_transformer"):
+                    cmd = [
+                        "python", "train_fakenews_transformer.py",
+                        "--dataset", "datasets/fake_news/all_fake_news_combined.csv",
+                        "--model-name", "distilbert-base-uncased",
+                        "--epochs", "2",
+                        "--batch-size", "8",
+                        "--max-length", "128"
+                    ]
+                    st.info(f"Transformer training started. This will take 1-2 hours.")
+                    subprocess.Popen(cmd, creationflags=subprocess.CREATE_NO_WINDOW if os.name == 'nt' else 0)
+                    st.success("✅ Transformer training launched! Check console for progress.")
+
+            # View trained models
+            if st.button("📋 View Trained Models", use_container_width=True, key="view_fake_news_models"):
+                models = fake_news_detector.get_available_models()
+                if models:
+                    st.write("### Available Models")
+                    for model in models:
+                        badge = "🟢" if model['type'] == 'transformer' else "🟡"
+                        st.write(f"{badge} **{model['name'][:50]}**")
+                        st.caption(f"  Type: {model['type']}, Accuracy: {model.get('accuracy', 'N/A')}")
+                else:
+                    st.warning("No trained models found. Train one first!")
             
             st.markdown("---")
             
@@ -607,7 +778,7 @@ datasets/deepfake/train/real/
 datasets/deepfake/train/fake/
 datasets/deepfake/test/real/
 datasets/deepfake/test/fake/
-datasets/fake_news/train.csv
+datasets/fake_news/all_fake_news_combined.csv
 datasets/sentiment/train.csv
             """)
             uploaded_file = st.file_uploader("Upload dataset file", type=['csv','zip','jpg','png'], key="admin_upload")
@@ -620,6 +791,42 @@ datasets/sentiment/train.csv
 # ---------- Header ----------
 st.markdown('<h1 class="main-header">🛡️ TruthGuard AI</h1>', unsafe_allow_html=True)
 st.markdown('<p class="sub-header">Advanced Media Authenticity & Analysis</p>', unsafe_allow_html=True)
+
+# -------------------- Home Page --------------------
+if mode == "Home":
+    st.markdown("## 🌟 Welcome to TruthGuard AI")
+    st.markdown("TruthGuard AI is your comprehensive platform for detecting digital deception and analyzing media authenticity. Explore our powerful tools below:")
+    
+    st.markdown("<br>", unsafe_allow_html=True)
+    
+    col1, col2, col3 = st.columns(3)
+    
+    with col1:
+        st.markdown('''
+        <div class="metric-card" style="height: 100%;">
+            <h3 style="margin-top: 0; font-size: 1.5rem;">📸 Deepfake Detection</h3>
+            <p style="font-size: 1rem; opacity: 0.9;">Analyze images and videos using advanced AI models to detect manipulation and synthetic media generation.</p>
+        </div>
+        ''', unsafe_allow_html=True)
+        
+    with col2:
+        st.markdown('''
+        <div class="metric-card" style="background: linear-gradient(135deg, #059669 0%, #10b981 100%); height: 100%;">
+            <h3 style="margin-top: 0; font-size: 1.5rem;">📰 Fake News Detection</h3>
+            <p style="font-size: 1rem; opacity: 0.9;">Verify the authenticity of text articles with NLP models like DistilBERT and Random Forest to combat misinformation.</p>
+        </div>
+        ''', unsafe_allow_html=True)
+        
+    with col3:
+        st.markdown('''
+        <div class="metric-card" style="background: linear-gradient(135deg, #d97706 0%, #f59e0b 100%); height: 100%;">
+            <h3 style="margin-top: 0; font-size: 1.5rem;">😊 Sentiment Analysis</h3>
+            <p style="font-size: 1rem; opacity: 0.9;">Understand the emotional tone behind text with our ensemble-based sentiment classification system.</p>
+        </div>
+        ''', unsafe_allow_html=True)
+        
+    st.markdown("<br><br>", unsafe_allow_html=True)
+    st.info("👈 Select a feature from the sidebar navigation to get started.")
 
 # -------------------- Deepfake Detection with Model Switching --------------------
 if mode == "Deepfake Detection":
@@ -805,98 +1012,242 @@ if mode == "Deepfake Detection":
         
         st.info(r.get('message', ''))
 
-# -------------------- Fake News --------------------
+# -------------------- UPDATED FAKE NEWS DETECTION SECTION --------------------
 elif mode == "Fake News Detection":
     st.header("📰 Fake News Detection")
     
-    # Show model status
-    if not st.session_state.get('fake_news_loaded', False):
-        st.warning("⚠️ No trained model found. Using default model or train first (admin only).")
-        st.info("You can still test with sample text, but results may not be accurate.")
-    else:
-        st.success("✅ Model loaded (transformer based)")
+    # Get available models
+    available_models = fake_news_detector.get_available_models()
+    model_info = fake_news_detector.get_model_info()
     
+    # Model selection and info
+    with st.expander("🤖 Model Information", expanded=True):
+        col1, col2 = st.columns(2)
+        with col1:
+            if model_info['is_trained']:
+                model_type = model_info.get('model_type', 'Unknown')
+                badge_class = "model-badge-transformer" if model_info.get('use_transformer') else "model-badge-rf"
+                st.markdown(f"**Currently Loaded:** <span class='model-badge {badge_class}'>{model_type}</span>", 
+                           unsafe_allow_html=True)
+                
+                if model_info.get('metadata') and 'accuracy' in model_info['metadata']:
+                    st.metric("Model Accuracy", f"{model_info['metadata']['accuracy']:.2%}")
+                elif model_info.get('metadata') and 'eval_accuracy' in model_info['metadata']:
+                    st.metric("Model Accuracy", f"{model_info['metadata']['eval_accuracy']:.2%}")
+            else:
+                st.warning("⚠️ No trained model found. Using fallback predictions.")
+                st.info("Admin can train models in the sidebar.")
+        
+        with col2:
+            if available_models:
+                st.write(f"📊 **Available Models:** {len(available_models)}")
+                
+                # Create a selectbox for model selection (optional)
+                model_names = [m['name'] for m in available_models]
+                selected_model_name = st.selectbox(
+                    "Switch Model (auto-loads best by default)",
+                    ["Auto (Best)"] + model_names,
+                    key="fn_model_selector"
+                )
+                
+                if selected_model_name != "Auto (Best)":
+                    # Find the selected model
+                    selected_model = next((m for m in available_models if m['name'] == selected_model_name), None)
+                    if selected_model:
+                        if selected_model['type'] == 'transformer':
+                            # Load transformer model
+                            if fake_news_detector.load_transformer_model(selected_model['path']):
+                                st.success(f"✅ Loaded {selected_model['type']} model")
+                                st.rerun()
+                        else:
+                            # Load traditional model
+                            if fake_news_detector.load_traditional_model(selected_model['path']):
+                                st.success(f"✅ Loaded {selected_model['type']} model")
+                                st.rerun()
+            else:
+                st.info("No trained models available")
+    
+    # Main detection interface
     method = st.radio("Input", ["Text", "File"], key="fn_method")
     
     if method == "Text":
-        text = st.text_area("Enter news text", height=150, key="fn_text")
-        if st.button("Analyze", key="analyze_fake"):
-            if not text.strip():
-                st.warning("Please enter some text.")
-            else:
-                with st.spinner("Analyzing..."):
-                    try:
-                        # Handle different return formats
-                        result = fake_news_detector.predict(text)
-                        
-                        # Check return type
-                        if isinstance(result, tuple) and len(result) == 2:
-                            label, conf = result
+        # Check if we need to clear
+        if st.session_state.clear_fn:
+            st.session_state.clear_fn = False
+            st.session_state.fn_text = ""
+        
+        text = st.text_area("Enter news text", height=150, key="fn_text", 
+                           placeholder="Paste news article text here...")
+        
+        col1, col2, col3 = st.columns([1, 1, 4])
+        with col1:
+            analyze_clicked = st.button("🔍 Analyze", key="analyze_fake", use_container_width=True)
+        with col2:
+            clear_clicked = st.button("🗑️ Clear", key="clear_fake", use_container_width=True)
+        
+        if clear_clicked:
+            st.session_state.clear_fn = True
+            st.rerun()
+        
+        if analyze_clicked and text.strip():
+            with st.spinner("Analyzing with trained model..."):
+                try:
+                    # Get prediction
+                    label, conf = fake_news_detector.predict(text)
+                    
+                    # Display results
+                    st.markdown("---")
+                    st.subheader("Analysis Result")
+                    
+                    col1, col2 = st.columns([2, 1])
+                    
+                    with col1:
+                        if label == 'FAKE':
+                            st.markdown(f'<div class="result-fake">🚨 FAKE NEWS DETECTED</div>', 
+                                      unsafe_allow_html=True)
                         else:
-                            label = result
-                            conf = 0.95  # Default confidence
+                            st.markdown(f'<div class="result-safe">✅ REAL NEWS</div>', 
+                                      unsafe_allow_html=True)
                         
-                        # Convert label to binary if needed
-                        if isinstance(label, str):
-                            is_fake = label.lower() in ['fake', '1', 'true', 'yes']
-                        else:
-                            is_fake = bool(label)
-                        
-                        if is_fake:
-                            st.error(f"🚨 FAKE NEWS ({conf*100:.1f}%)")
-                        else:
-                            st.success(f"✅ REAL NEWS ({(1-conf)*100:.1f}% confidence)")
+                        # Show confidence meter
+                        st.metric("Confidence Score", f"{conf:.2%}")
                         
                         # Show probability bar
-                        prob = conf if is_fake else 1 - conf
-                        st.progress(prob, text=f"Fake probability: {prob*100:.1f}%")
-                        
-                    except Exception as e:
-                        st.error(f"Prediction error: {e}")
-                        print("Error in prediction:", e)
+                        st.progress(conf, text=f"Fake probability: {conf*100:.1f}%")
+                    
+                    with col2:
+                        # Create confidence gauge
+                        fig = go.Figure(go.Indicator(
+                            mode="gauge+number",
+                            value=conf * 100,
+                            domain={'x': [0, 1], 'y': [0, 1]},
+                            title={'text': "Confidence"},
+                            gauge={
+                                'axis': {'range': [0, 100]},
+                                'bar': {'color': "red" if label == 'FAKE' else "green"},
+                                'steps': [
+                                    {'range': [0, 50], 'color': "lightgray"},
+                                    {'range': [50, 100], 'color': "gray"}
+                                ],
+                                'threshold': {
+                                    'line': {'color': "black", 'width': 4},
+                                    'thickness': 0.75,
+                                    'value': conf * 100
+                                }
+                            }
+                        ))
+                        fig.update_layout(height=250, margin=dict(l=20, r=20, t=50, b=20))
+                        st.plotly_chart(fig, use_container_width=True)
+                    
+                    # Show model info used
+                    model_type = model_info.get('model_type', 'Fallback')
+                    if model_info.get('use_transformer'):
+                        st.caption(f"🤖 Predicted by: **Transformer Model** ({model_type})")
+                    else:
+                        st.caption(f"🤖 Predicted by: **Random Forest Model** ({model_type})")
+                    
+                    # Show word count
+                    word_count = len(text.split())
+                    st.caption(f"📝 Text length: {word_count} words")
+                    
+                except Exception as e:
+                    st.error(f"Prediction error: {e}")
+    
     else:  # File upload
-        file = st.file_uploader("Upload file", type=['txt','csv'], key="fn_file")
+        file = st.file_uploader("Upload file", type=['txt', 'csv'], key="fn_file")
         if file:
+            # Load and preview data
             if file.name.endswith('.csv'):
                 df = pd.read_csv(file)
-                col = st.selectbox("Select text column", df.columns, key="fn_col")
-                texts = df[col].tolist()
+                st.write("📊 File Preview:")
+                st.dataframe(df.head())
+                
+                # Select text column
+                text_col = st.selectbox("Select text column", df.columns, key="fn_col")
+                texts = df[text_col].astype(str).tolist()
             else:
                 content = file.read().decode('utf-8')
                 texts = [line.strip() for line in content.split('\n') if line.strip()]
-            st.write(f"Loaded {len(texts)} entries.")
-            if st.button("Analyze File", key="analyze_file_fake"):
+                st.write(f"📊 Loaded {len(texts)} texts")
+                if texts:
+                    st.write("Preview:", texts[:3])
+            
+            # Analysis options
+            col1, col2 = st.columns(2)
+            with col1:
+                max_texts = st.number_input("Max texts to analyze", 
+                                           min_value=1, 
+                                           max_value=min(500, len(texts)), 
+                                           value=min(50, len(texts)),
+                                           key="fn_max_texts")
+            with col2:
+                show_progress = st.checkbox("Show progress", value=True, key="fn_show_progress")
+            
+            if st.button("🚀 Analyze File", key="analyze_file_fake", use_container_width=True):
                 results = []
-                progress_bar = st.progress(0)
-                for i, t in enumerate(texts[:50]):  # Limit to 50 for performance
+                progress_bar = st.progress(0) if show_progress else None
+                
+                for i, t in enumerate(texts[:max_texts]):
                     try:
-                        result = fake_news_detector.predict(t)
-                        if isinstance(result, tuple) and len(result) == 2:
-                            label, conf = result
-                        else:
-                            label = result
-                            conf = 0.95
-                        
-                        if isinstance(label, str):
-                            is_fake = label.lower() in ['fake', '1', 'true', 'yes']
-                        else:
-                            is_fake = bool(label)
-                        
+                        label, conf = fake_news_detector.predict(t)
                         results.append({
-                            'text': t[:50] + '...' if len(t) > 50 else t,
-                            'label': 'FAKE' if is_fake else 'REAL',
-                            'confidence': f"{conf*100:.1f}%"
+                            'text': t[:100] + '...' if len(t) > 100 else t,
+                            'label': label,
+                            'confidence': f"{conf:.2%}",
+                            'confidence_score': conf
                         })
-                    except:
+                    except Exception as e:
                         results.append({
-                            'text': t[:50] + '...' if len(t) > 50 else t,
+                            'text': t[:100] + '...' if len(t) > 100 else t,
                             'label': 'ERROR',
-                            'confidence': 'N/A'
+                            'confidence': 'N/A',
+                            'confidence_score': 0.0
                         })
-                    progress_bar.progress((i+1)/min(len(texts), 50))
-                st.dataframe(pd.DataFrame(results))
+                    
+                    if show_progress:
+                        progress_bar.progress((i + 1) / max_texts)
+                
+                # Display results
+                results_df = pd.DataFrame(results)
+                st.dataframe(results_df, use_container_width=True)
+                
+                # Statistics
+                col1, col2, col3 = st.columns(3)
+                with col1:
+                    fake_count = len(results_df[results_df['label'] == 'FAKE'])
+                    st.metric("Fake News", fake_count)
+                with col2:
+                    real_count = len(results_df[results_df['label'] == 'REAL'])
+                    st.metric("Real News", real_count)
+                with col3:
+                    error_count = len(results_df[results_df['label'] == 'ERROR'])
+                    st.metric("Errors", error_count)
+                
+                # Average confidence
+                valid_results = results_df[results_df['label'] != 'ERROR']
+                if len(valid_results) > 0:
+                    avg_conf = valid_results['confidence_score'].mean()
+                    st.metric("Average Confidence", f"{avg_conf:.2%}")
+                
+                # Download button
+                csv = results_df.to_csv(index=False)
+                st.download_button(
+                    label="📥 Download Results",
+                    data=csv,
+                    file_name=f"fakenews_results_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
+                    mime="text/csv",
+                    key="download_fn_btn"
+                )
+                
+                # Show distribution pie chart
+                if len(valid_results) > 0:
+                    fig = px.pie(valid_results, names='label', 
+                                title='Prediction Distribution',
+                                color='label',
+                                color_discrete_map={'FAKE':'red', 'REAL':'green'})
+                    st.plotly_chart(fig, use_container_width=True, key="fn_dist_chart")
 
-# -------------------- Sentiment --------------------
+# -------------------- FIXED SENTIMENT ANALYSIS SECTION --------------------
 elif mode == "Sentiment Analysis":
     st.header("😊 Sentiment Analysis")
     
@@ -916,20 +1267,32 @@ elif mode == "Sentiment Analysis":
         "🎯 Aspect Analysis"
     ])
     
-    # Tab 1: Text Analysis
+    # Tab 1: Text Analysis - FIXED with form
     with sent_tab1:
         st.markdown("### Single Text Analysis")
-        text = st.text_area("Enter text to analyze", height=150, key="sentiment_text_input")
         
-        col1, col2 = st.columns([1, 1])
-        with col1:
-            analyze_btn = st.button("🔍 Analyze Text", key="analyze_text_btn", use_container_width=True)
-        with col2:
-            clear_btn = st.button("🗑️ Clear", key="clear_text_btn", use_container_width=True)
-            if clear_btn:
-                st.session_state.sentiment_text_input = ""
-                st.rerun()
+        # Check if we need to clear
+        if st.session_state.clear_sentiment:
+            st.session_state.clear_sentiment = False
+            st.session_state.sentiment_text_input = ""
         
+        # Use a form to handle clearing properly
+        with st.form(key="sentiment_form"):
+            text = st.text_area("Enter text to analyze", height=150, key="sentiment_text_input",
+                               placeholder="Type or paste text here...")
+            
+            col1, col2 = st.columns([1, 1])
+            with col1:
+                analyze_btn = st.form_submit_button("🔍 Analyze Text", use_container_width=True)
+            with col2:
+                clear_btn = st.form_submit_button("🗑️ Clear", use_container_width=True)
+        
+        # Handle clear button
+        if clear_btn:
+            st.session_state.clear_sentiment = True
+            st.rerun()
+        
+        # Handle analyze button
         if analyze_btn and text.strip():
             with st.spinner("Analyzing sentiment..."):
                 try:
@@ -937,7 +1300,10 @@ elif mode == "Sentiment Analysis":
                     label, conf = sentiment_analyzer.analyze(text)
                     st.session_state.last_sentiment = (label, conf)
                     
-                    # Display results in columns
+                    # Display results
+                    st.markdown("---")
+                    st.subheader("Analysis Result")
+                    
                     col1, col2 = st.columns([2, 1])
                     
                     with col1:
@@ -949,11 +1315,14 @@ elif mode == "Sentiment Analysis":
                             st.info(f"😐 NEUTRAL")
                         
                         st.metric("Confidence", f"{conf:.2%}")
+                        
+                        # Show probability bar
+                        st.progress(conf, text=f"Confidence: {conf:.2%}")
                     
                     with col2:
-                        # Show confidence gauge with unique key
+                        # Show confidence gauge
                         fig = sentiment_analyzer.create_gauge(conf, label)
-                        st.plotly_chart(fig, use_container_width=True, key=f"gauge_{hash(text)}_{datetime.now().timestamp()}")
+                        st.plotly_chart(fig, use_container_width=True)
                     
                     # Show probability distribution
                     try:
@@ -969,9 +1338,13 @@ elif mode == "Sentiment Analysis":
                                                           'Neutral':'gray', 
                                                           'Positive':'green'},
                                        title="Probability Distribution")
-                            st.plotly_chart(fig, use_container_width=True, key=f"probs_{hash(text)}_{datetime.now().timestamp()}")
+                            st.plotly_chart(fig, use_container_width=True)
                     except:
                         pass
+                    
+                    # Show word count
+                    word_count = len(text.split())
+                    st.caption(f"📝 Text length: {word_count} words")
                     
                     # Aspect analysis if available
                     if ASPECT_AVAILABLE and text.strip():
@@ -1028,13 +1401,15 @@ elif mode == "Sentiment Analysis":
                         results.append({
                             'text': t[:100] + '...' if len(t) > 100 else t,
                             'sentiment': label,
-                            'confidence': f"{conf:.2%}"
+                            'confidence': f"{conf:.2%}",
+                            'confidence_score': conf
                         })
                     except:
                         results.append({
                             'text': t[:100] + '...' if len(t) > 100 else t,
                             'sentiment': 'ERROR',
-                            'confidence': 'N/A'
+                            'confidence': 'N/A',
+                            'confidence_score': 0.0
                         })
                     
                     if show_progress:
@@ -1043,6 +1418,24 @@ elif mode == "Sentiment Analysis":
                 # Display results
                 results_df = pd.DataFrame(results)
                 st.dataframe(results_df, use_container_width=True)
+                
+                # Statistics
+                col1, col2, col3 = st.columns(3)
+                with col1:
+                    pos_count = len(results_df[results_df['sentiment'] == 'POSITIVE'])
+                    st.metric("Positive", pos_count)
+                with col2:
+                    neu_count = len(results_df[results_df['sentiment'] == 'NEUTRAL'])
+                    st.metric("Neutral", neu_count)
+                with col3:
+                    neg_count = len(results_df[results_df['sentiment'] == 'NEGATIVE'])
+                    st.metric("Negative", neg_count)
+                
+                # Average confidence
+                valid_results = results_df[results_df['sentiment'] != 'ERROR']
+                if len(valid_results) > 0:
+                    avg_conf = valid_results['confidence_score'].mean()
+                    st.metric("Average Confidence", f"{avg_conf:.2%}")
                 
                 # Download button
                 csv = results_df.to_csv(index=False)
@@ -1055,8 +1448,8 @@ elif mode == "Sentiment Analysis":
                 )
                 
                 # Show distribution
-                if len(results_df) > 0:
-                    fig = px.pie(results_df, names='sentiment', 
+                if len(valid_results) > 0:
+                    fig = px.pie(valid_results, names='sentiment', 
                                 title='Sentiment Distribution',
                                 color='sentiment',
                                 color_discrete_map={'POSITIVE':'green', 
