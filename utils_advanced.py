@@ -1,133 +1,280 @@
-import cv2
-import numpy as np
-from PIL import Image
-import streamlit as st
-import plotly.graph_objects as go
-import plotly.express as px
-import pandas as pd
-import hashlib
-import json
-from datetime import datetime
+"""
+Utility functions for TruthGuard AI
+"""
+
 import os
-import psutil
-import gc
-from cachetools import TTLCache
-import base64
-from io import BytesIO
+import json
+import hashlib
+import logging
+from datetime import datetime
+from pathlib import Path
+from typing import Dict, Any, Optional
+import pandas as pd
+import numpy as np
 
-class AdvancedUtils:
-    def __init__(self):
-        self.result_cache = TTLCache(maxsize=100, ttl=3600)
-        self.image_cache = TTLCache(maxsize=50, ttl=1800)
+# Configure logging
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
-    def get_memory_usage(self):
-        process = psutil.Process(os.getpid())
-        mem = process.memory_info()
-        return {'rss': mem.rss / 1024 / 1024, 'vms': mem.vms / 1024 / 1024, 'percent': process.memory_percent()}
-
-    def optimize_memory(self):
-        if self.get_memory_usage()['rss'] > 3500:
-            gc.collect()
-            self.image_cache.clear()
-            return True
-        return False
-
-    @st.cache_data(ttl=3600, max_entries=50)
-    def load_image_cached(self, image_file):
-        return np.array(Image.open(image_file))
-
-    def preprocess_frame_advanced(self, frame, target_size=(224,224)):
-        frame = cv2.resize(frame, target_size)
-        if len(frame.shape)==3 and frame.shape[2]==3:
-            frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-        else:
-            frame_rgb = frame
-        lab = cv2.cvtColor(frame_rgb, cv2.COLOR_RGB2LAB)
-        lab[:,:,0] = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8,8)).apply(lab[:,:,0])
-        frame_eq = cv2.cvtColor(lab, cv2.COLOR_LAB2RGB)
-        frame_denoised = cv2.fastNlMeansDenoisingColored(frame_eq, None, 10,10,7,21)
-        return frame_denoised.astype(np.float32)/255.0
-
-    def extract_frames_adaptive(self, video_path, max_frames=15):
-        frames = []
-        cap = cv2.VideoCapture(video_path)
-        total = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
-        fps = cap.get(cv2.CAP_PROP_FPS)
-        duration = total/fps if fps>0 else 0
-        if duration<10: num = min(max_frames, total)
-        elif duration<30: num = min(12, total)
-        else: num = min(8, total)
-        indices = np.linspace(0, total-1, num, dtype=int)
-        for idx in indices:
-            cap.set(cv2.CAP_PROP_POS_FRAMES, idx)
-            ret, frame = cap.read()
-            if ret:
-                if len(frames)==0 or self.is_keyframe(frame, frames[-1]):
-                    frames.append(frame)
-        cap.release()
-        return frames, duration
-
-    def is_keyframe(self, curr, prev, thresh=30):
-        if prev is None: return True
-        curr_gray = cv2.cvtColor(curr, cv2.COLOR_BGR2GRAY)
-        prev_gray = cv2.cvtColor(prev, cv2.COLOR_BGR2GRAY)
-        return np.mean(cv2.absdiff(curr_gray, prev_gray)) > thresh
-
-    def create_advanced_gauge(self, value, title, subtext=""):
-        fig = go.Figure(go.Indicator(
-            mode="gauge+number+delta",
-            value=value,
-            title={'text': title},
-            delta={'reference': 50},
-            gauge={'axis': {'range': [0,100]}, 'steps': [
-                {'range':[0,30],'color':'green'},
-                {'range':[30,60],'color':'yellow'},
-                {'range':[60,80],'color':'orange'},
-                {'range':[80,100],'color':'red'}
-            ]}
-        ))
-        fig.update_layout(height=350)
-        return fig
-
-    def create_comparison_chart(self, real, fake, uncertain=0):
-        return px.bar(x=['Authentic','Fake','Uncertain'], y=[real*100,fake*100,uncertain*100],
-                      color=['green','red','gray'], labels={'x':'','y':'Confidence %'})
-
-    def extract_news_from_url(self, url):
+class Utils:
+    """
+    Utility class for common functions
+    """
+    
+    @staticmethod
+    def ensure_dir(directory: str):
+        """
+        Ensure directory exists
+        
+        Args:
+            directory: Directory path
+        """
+        Path(directory).mkdir(parents=True, exist_ok=True)
+    
+    @staticmethod
+    def save_json(data: Dict, filepath: str):
+        """
+        Save data to JSON file
+        
+        Args:
+            data: Dictionary to save
+            filepath: Output file path
+        """
         try:
-            from newspaper import Article
-            a = Article(url)
-            a.download(); a.parse(); a.nlp()
-            return {'title':a.title,'text':a.text,'summary':a.summary,'keywords':a.keywords,
-                    'publish_date':a.publish_date,'authors':a.authors,'success':True}
+            with open(filepath, 'w') as f:
+                json.dump(data, f, indent=2)
+            logger.info(f"Data saved to {filepath}")
         except Exception as e:
-            return {'success':False,'error':str(e)}
+            logger.error(f"Error saving JSON: {e}")
+    
+    @staticmethod
+    def load_json(filepath: str) -> Optional[Dict]:
+        """
+        Load data from JSON file
+        
+        Args:
+            filepath: Input file path
+            
+        Returns:
+            Dictionary or None if error
+        """
+        try:
+            if os.path.exists(filepath):
+                with open(filepath, 'r') as f:
+                    return json.load(f)
+            return None
+        except Exception as e:
+            logger.error(f"Error loading JSON: {e}")
+            return None
+    
+    @staticmethod
+    def hash_string(text: str) -> str:
+        """
+        Create SHA-256 hash of string
+        
+        Args:
+            text: Input string
+            
+        Returns:
+            Hash string
+        """
+        return hashlib.sha256(text.encode()).hexdigest()
+    
+    @staticmethod
+    def get_timestamp() -> str:
+        """
+        Get current timestamp
+        
+        Returns:
+            Timestamp string
+        """
+        return datetime.now().strftime("%Y%m%d_%H%M%S")
+    
+    @staticmethod
+    def format_file_size(size_bytes: int) -> str:
+        """
+        Format file size in human-readable format
+        
+        Args:
+            size_bytes: Size in bytes
+            
+        Returns:
+            Formatted string
+        """
+        if size_bytes < 1024:
+            return f"{size_bytes} B"
+        elif size_bytes < 1024 * 1024:
+            return f"{size_bytes / 1024:.1f} KB"
+        elif size_bytes < 1024 * 1024 * 1024:
+            return f"{size_bytes / (1024 * 1024):.1f} MB"
+        else:
+            return f"{size_bytes / (1024 * 1024 * 1024):.1f} GB"
+    
+    @staticmethod
+    def validate_image(file) -> bool:
+        """
+        Validate if file is an image
+        
+        Args:
+            file: File object
+            
+        Returns:
+            True if valid image
+        """
+        valid_extensions = {'.jpg', '.jpeg', '.png', '.bmp', '.gif'}
+        ext = os.path.splitext(file.name)[1].lower()
+        return ext in valid_extensions
+    
+    @staticmethod
+    def validate_video(file) -> bool:
+        """
+        Validate if file is a video
+        
+        Args:
+            file: File object
+            
+        Returns:
+            True if valid video
+        """
+        valid_extensions = {'.mp4', '.avi', '.mov', '.mkv', '.flv'}
+        ext = os.path.splitext(file.name)[1].lower()
+        return ext in valid_extensions
+    
+    @staticmethod
+    def validate_text(file) -> bool:
+        """
+        Validate if file is a text file
+        
+        Args:
+            file: File object
+            
+        Returns:
+            True if valid text file
+        """
+        valid_extensions = {'.txt', '.csv', '.json', '.md'}
+        ext = os.path.splitext(file.name)[1].lower()
+        return ext in valid_extensions
+    
+    @staticmethod
+    def safe_divide(a: float, b: float, default: float = 0.0) -> float:
+        """
+        Safe division with zero check
+        
+        Args:
+            a: Numerator
+            b: Denominator
+            default: Default value if denominator is zero
+            
+        Returns:
+            Division result or default
+        """
+        return a / b if b != 0 else default
+    
+    @staticmethod
+    def normalize_scores(scores: list) -> list:
+        """
+        Normalize a list of scores to [0, 1]
+        
+        Args:
+            scores: List of scores
+            
+        Returns:
+            Normalized scores
+        """
+        if not scores:
+            return []
+        
+        min_score = min(scores)
+        max_score = max(scores)
+        
+        if max_score == min_score:
+            return [0.5] * len(scores)
+        
+        return [(s - min_score) / (max_score - min_score) for s in scores]
+    
+    @staticmethod
+    def create_summary_stats(df: pd.DataFrame) -> Dict:
+        """
+        Create summary statistics for DataFrame
+        
+        Args:
+            df: Input DataFrame
+            
+        Returns:
+            Dictionary with statistics
+        """
+        stats = {}
+        
+        try:
+            stats['row_count'] = len(df)
+            stats['column_count'] = len(df.columns)
+            stats['missing_values'] = df.isnull().sum().sum()
+            
+            # Numeric columns stats
+            numeric_cols = df.select_dtypes(include=[np.number]).columns
+            if len(numeric_cols) > 0:
+                stats['numeric_columns'] = list(numeric_cols)
+                stats['numeric_stats'] = df[numeric_cols].describe().to_dict()
+            
+            # Categorical columns stats
+            cat_cols = df.select_dtypes(include=['object']).columns
+            if len(cat_cols) > 0:
+                stats['categorical_columns'] = list(cat_cols)
+                for col in cat_cols[:5]:  # Limit to first 5
+                    stats[f'{col}_top_values'] = df[col].value_counts().head(3).to_dict()
+            
+        except Exception as e:
+            logger.error(f"Error creating summary stats: {e}")
+        
+        return stats
+    
+    @staticmethod
+    def chunk_text(text: str, chunk_size: int = 512) -> list:
+        """
+        Split text into chunks
+        
+        Args:
+            text: Input text
+            chunk_size: Maximum chunk size
+            
+        Returns:
+            List of text chunks
+        """
+        words = text.split()
+        chunks = []
+        
+        for i in range(0, len(words), chunk_size):
+            chunk = ' '.join(words[i:i + chunk_size])
+            chunks.append(chunk)
+        
+        return chunks
+    
+    @staticmethod
+    def get_file_info(filepath: str) -> Dict:
+        """
+        Get file information
+        
+        Args:
+            filepath: Path to file
+            
+        Returns:
+            Dictionary with file info
+        """
+        info = {}
+        
+        try:
+            if os.path.exists(filepath):
+                stat = os.stat(filepath)
+                info['name'] = os.path.basename(filepath)
+                info['size'] = stat.st_size
+                info['size_formatted'] = Utils.format_file_size(stat.st_size)
+                info['created'] = datetime.fromtimestamp(stat.st_ctime).isoformat()
+                info['modified'] = datetime.fromtimestamp(stat.st_mtime).isoformat()
+                info['extension'] = os.path.splitext(filepath)[1].lower()
+        except Exception as e:
+            logger.error(f"Error getting file info: {e}")
+        
+        return info
 
-    def compute_perceptual_hash(self, image):
-        small = cv2.resize(image, (8,8))
-        gray = cv2.cvtColor(small, cv2.COLOR_BGR2GRAY)
-        mean = np.mean(gray)
-        return ''.join(['1' if p>mean else '0' for row in gray for p in row])
-
-    def image_to_base64(self, image):
-        buffered = BytesIO()
-        if isinstance(image, np.ndarray):
-            image = Image.fromarray(image)
-        image.save(buffered, format="PNG")
-        return base64.b64encode(buffered.getvalue()).decode()
-
-    def save_detection_result(self, result_data):
-        history_file = 'detection_history.json'
-        history = []
-        if os.path.exists(history_file):
-            with open(history_file) as f:
-                history = json.load(f)
-        result_data['timestamp'] = datetime.now().isoformat()
-        result_data['memory_usage'] = self.get_memory_usage()
-        history.append(result_data)
-        if len(history) > 100:
-            history = history[-100:]
-        with open(history_file, 'w') as f:
-            json.dump(history, f, indent=2, default=str)
-
-utils = AdvancedUtils()
+# Create singleton instance
+utils = Utils()
