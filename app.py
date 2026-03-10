@@ -1,4 +1,5 @@
 # app.py (fully integrated with enhanced Fake News Detection and fixed Sentiment Analysis)
+# UPGRADED VERSION - With Clickable Home Page Features and Compact Deepfake UI
 
 import streamlit as st
 import numpy as np
@@ -120,7 +121,13 @@ if 'clear_sentiment' not in st.session_state:
 if 'clear_fn' not in st.session_state:
     st.session_state.clear_fn = False
 
-# ---------- Custom CSS (enhanced) ----------
+# NEW: Initialize session state for navigation
+if 'navigation_target' not in st.session_state:
+    st.session_state.navigation_target = None
+if 'previous_mode' not in st.session_state:
+    st.session_state.previous_mode = None
+
+# ---------- Custom CSS (enhanced) - WITH CLICKABLE CARDS ----------
 st.markdown("""
 <style>
     /* Import Google Fonts */
@@ -129,19 +136,19 @@ st.markdown("""
     /* Global Font Change */
     html, body, [class*="css"] {
         font-family: 'Outfit', sans-serif !important;
-        color: #f8fafc !important; /* Update global text to light color */
+        color: #f8fafc !important;
     }
 
-    /* General Dark/Light Background Tweaks for Premium Feel */
+    /* General Dark/Light Background Tweaks */
     .stApp {
-        background-color: #0f172a; /* Dark background */
+        background-color: #0f172a;
     }
     
     /* Headers */
     .main-header {
         font-size: 3.5rem;
         font-weight: 800;
-        background: linear-gradient(135deg, #60a5fa, #a78bfa, #f472b6); /* Lighter gradient for dark bg */
+        background: linear-gradient(135deg, #60a5fa, #a78bfa, #f472b6);
         -webkit-background-clip: text;
         -webkit-text-fill-color: transparent;
         text-align: center;
@@ -150,14 +157,14 @@ st.markdown("""
     }
     .sub-header {
         font-size: 1.4rem;
-        color: #cbd5e1; /* Lighter slate for subheader */
+        color: #cbd5e1;
         text-align: center;
         margin-bottom: 2.5rem;
         font-weight: 400;
         letter-spacing: 0.5px;
     }
 
-    /* Cards & Containers - Glassmorphism & Shadow */
+    /* Cards & Containers - CLICKABLE VERSION */
     .metric-card {
         background: linear-gradient(135deg, #4f46e5 0%, #7c3aed 100%);
         padding: 1.8rem;
@@ -167,13 +174,61 @@ st.markdown("""
         box-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.4);
         transition: transform 0.3s cubic-bezier(0.4, 0, 0.2, 1), box-shadow 0.3s ease;
         border: 1px solid rgba(255, 255, 255, 0.1);
+        cursor: pointer;
+        height: 100%;
+        min-height: 220px;
+        display: flex;
+        flex-direction: column;
+        justify-content: center;
+        position: relative;
+        overflow: hidden;
     }
     .metric-card:hover {
-        transform: translateY(-5px);
-        box-shadow: 0 20px 25px -5px rgba(0, 0, 0, 0.5);
+        transform: translateY(-8px) scale(1.02);
+        box-shadow: 0 25px 30px -5px rgba(0, 0, 0, 0.6);
+        border-color: #818cf8;
+    }
+    .metric-card:active {
+        transform: translateY(-2px) scale(0.98);
+    }
+    
+    /* Add click indicator */
+    .metric-card::after {
+        content: "🔍";
+        position: absolute;
+        bottom: 10px;
+        right: 15px;
+        font-size: 1.2rem;
+        opacity: 0.5;
+        transition: opacity 0.3s;
+    }
+    .metric-card:hover::after {
+        opacity: 1;
+    }
+    
+    /* Different colors for different cards */
+    .metric-card-df {
+        background: linear-gradient(135deg, #4f46e5 0%, #7c3aed 100%);
+    }
+    .metric-card-fn {
+        background: linear-gradient(135deg, #059669 0%, #10b981 100%);
+    }
+    .metric-card-sa {
+        background: linear-gradient(135deg, #d97706 0%, #f59e0b 100%);
+    }
+    
+    .metric-card h3 {
+        margin-top: 0;
+        font-size: 1.8rem;
+        margin-bottom: 1rem;
+    }
+    .metric-card p {
+        font-size: 1.1rem;
+        opacity: 0.95;
+        line-height: 1.5;
     }
 
-    /* Results styling with glowing and pulsing effects */
+    /* Results styling */
     .result-safe {
         background: linear-gradient(135deg, #059669 0%, #10b981 100%);
         padding: 2.5rem;
@@ -230,13 +285,13 @@ st.markdown("""
 
     /* Sidebar User Card */
     .sidebar-user-card {
-        background: rgba(30, 41, 59, 0.8); /* Darker glass effect */
+        background: rgba(30, 41, 59, 0.8);
         backdrop-filter: blur(10px);
         padding: 1.2rem;
         border-radius: 12px;
         box-shadow: 0 4px 15px rgba(0,0,0,0.2);
         margin-bottom: 1.5rem;
-        border-left: 5px solid #818cf8; /* Lighter indigo */
+        border-left: 5px solid #818cf8;
         transition: transform 0.2s;
     }
     .sidebar-user-card:hover {
@@ -244,13 +299,13 @@ st.markdown("""
     }
     .sidebar-user-card h4 {
         margin: 0;
-        color: #f8fafc; /* Light text */
+        color: #f8fafc;
         font-size: 1.2rem;
         font-weight: 700;
     }
     .sidebar-user-card p {
         margin: 0.4rem 0 0;
-        color: #cbd5e1; /* Lighter slate text */
+        color: #cbd5e1;
         font-size: 0.95rem;
     }
 
@@ -258,35 +313,30 @@ st.markdown("""
     div.stButton > button {
         width: 100%;
         border-radius: 12px;
-        border: 1px solid rgba(255,255,255,0.1); /* Light border */
-        background: #1e293b; /* Dark slate background */
-        color: #f8fafc; /* Light text */
+        border: 1px solid rgba(255,255,255,0.1);
+        background: #1e293b;
+        color: #f8fafc;
         font-weight: 600;
         padding: 0.6rem 1.2rem;
         box-shadow: 0 2px 5px rgba(0,0,0,0.2);
         transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
     }
     div.stButton > button:hover {
-        background: #334155; /* Slightly lighter slate */
+        background: #334155;
         transform: translateY(-2px);
         box-shadow: 0 8px 15px rgba(0,0,0,0.3);
-        color: #818cf8; /* Light indigo text on hover */
+        color: #818cf8;
         border-color: #6366f1;
     }
-    div.stButton > button:active {
-        transform: translateY(0);
-    }
     
-    /* Primary buttons (e.g., forms, analyzing) often get kind="primary" in standard Streamlit styling */
     div.stButton > button[kind="primary"] {
-        background: linear-gradient(135deg, #6366f1 0%, #818cf8 100%); /* Adjusted primary gradient */
+        background: linear-gradient(135deg, #6366f1 0%, #818cf8 100%);
         color: white;
         border: none;
         box-shadow: 0 4px 14px 0 rgba(99, 102, 241, 0.39);
     }
     div.stButton > button[kind="primary"]:hover {
         background: linear-gradient(135deg, #4f46e5 0%, #6366f1 100%);
-        color: white;
         box-shadow: 0 6px 20px rgba(99, 102, 241, 0.5);
     }
 
@@ -318,7 +368,7 @@ st.markdown("""
     /* Weight Sliders container */
     .weight-slider {
         padding: 1rem;
-        background: #1e293b; /* Darker bg */
+        background: #1e293b;
         border-radius: 12px;
         margin-bottom: 1rem;
         box-shadow: 0 2px 10px rgba(0,0,0,0.2);
@@ -333,8 +383,8 @@ st.markdown("""
     .streamlit-expanderHeader {
         font-weight: 600;
         font-size: 1.1rem;
-        color: #f8fafc; /* Light text */
-        background-color: #1e293b; /* Darker background */
+        color: #f8fafc;
+        background-color: #1e293b;
         border-radius: 8px;
         padding: 0.5rem 1rem;
         transition: all 0.2s;
@@ -342,13 +392,13 @@ st.markdown("""
     }
     .streamlit-expanderHeader:hover {
         background-color: #334155;
-        color: #818cf8; /* Hover color */
+        color: #818cf8;
     }
     
     /* Tabs styling */
     .stTabs [data-baseweb="tab-list"] {
         gap: 8px;
-        background-color: rgba(15, 23, 42, 0.5); /* Darker tab list bg */
+        background-color: rgba(15, 23, 42, 0.5);
         padding: 5px;
         border-radius: 12px;
     }
@@ -356,7 +406,7 @@ st.markdown("""
         padding: 10px 20px;
         border-radius: 8px;
         font-weight: 600;
-        color: #94a3b8; /* Dimmer text for inactive tabs */
+        color: #94a3b8;
         transition: all 0.3s;
     }
     .stTabs [data-baseweb="tab"]:hover {
@@ -364,18 +414,18 @@ st.markdown("""
         background: rgba(129, 140, 248, 0.1);
     }
     .stTabs [aria-selected="true"] {
-        background: #1e293b !important; /* Dark bg for selected tab */
+        background: #1e293b !important;
         box-shadow: 0 2px 8px rgba(0,0,0,0.2) !important;
-        color: #818cf8 !important; /* Indigo text for selected */
+        color: #818cf8 !important;
         border-bottom: 3px solid #6366f1 !important;
     }
     
     /* Inputs */
     .stTextInput>div>div>input, .stTextArea>div>div>textarea {
         border-radius: 10px;
-        border: 1px solid #334155; /* Darker border */
-        background-color: #0f172a; /* Darker input bg */
-        color: #f8fafc; /* Light text */
+        border: 1px solid #334155;
+        background-color: #0f172a;
+        color: #f8fafc;
         transition: all 0.3s;
         box-shadow: inset 0 2px 4px rgba(0,0,0,0.2);
     }
@@ -383,7 +433,48 @@ st.markdown("""
         border-color: #818cf8;
         box-shadow: 0 0 0 2px rgba(129, 140, 248, 0.2);
     }
+    
+    /* Back button styling */
+    .back-button {
+        display: inline-block;
+        margin-bottom: 1rem;
+        padding: 0.5rem 1rem;
+        background: #1e293b;
+        color: #f8fafc;
+        border-radius: 8px;
+        text-decoration: none;
+        font-weight: 600;
+        border: 1px solid #334155;
+        transition: all 0.3s;
+        cursor: pointer;
+    }
+    .back-button:hover {
+        background: #334155;
+        color: #818cf8;
+        border-color: #6366f1;
+    }
 </style>
+
+<!-- JavaScript for handling card clicks -->
+<script>
+function navigateTo(feature) {
+    // Create a hidden input to trigger Streamlit rerun with parameter
+    const input = document.createElement('input');
+    input.type = 'hidden';
+    input.name = 'navigation';
+    input.value = feature;
+    document.body.appendChild(input);
+    
+    // Trigger form submission or custom event
+    const event = new CustomEvent('streamlit:navigation', { detail: feature });
+    window.dispatchEvent(event);
+    
+    // Also try Streamlit's native setComponentValue if available
+    if (window.Streamlit) {
+        window.Streamlit.setComponentValue(feature);
+    }
+}
+</script>
 """, unsafe_allow_html=True)
 
 # ---------- Login / Registration ----------
@@ -448,6 +539,29 @@ if not st.session_state.authenticated:
     register_tab()
     st.stop()
 
+# ---------- Handle navigation from home page clicks ----------
+# Check for navigation parameter (from JavaScript)
+navigation_params = st.query_params if hasattr(st, 'query_params') else {}
+if 'nav' in navigation_params:
+    target = navigation_params['nav'][0] if isinstance(navigation_params['nav'], list) else navigation_params['nav']
+    if target == 'deepfake':
+        st.session_state.navigation_target = 'Deepfake Detection'
+    elif target == 'fakenews':
+        st.session_state.navigation_target = 'Fake News Detection'
+    elif target == 'sentiment':
+        st.session_state.navigation_target = 'Sentiment Analysis'
+    # Clear the query param
+    st.query_params.clear()
+
+# Also check session state for navigation
+if st.session_state.navigation_target:
+    # Store previous mode before changing
+    st.session_state.previous_mode = mode if 'mode' in locals() else None
+    # Set the mode to the navigation target
+    mode = st.session_state.navigation_target
+    # Clear navigation target to prevent loops
+    st.session_state.navigation_target = None
+
 # ---------- Sidebar for authenticated users ----------
 with st.sidebar:
     st.image("https://via.placeholder.com/300x80/4a90e2/ffffff?text=TruthGuard+AI", use_container_width=True)
@@ -463,16 +577,27 @@ with st.sidebar:
         st.session_state.authenticated = False
         st.session_state.username = None
         st.session_state.role = None
+        st.session_state.navigation_target = None
         st.rerun()
     
     st.markdown("---")
     
     st.markdown("### 🧭 Navigation")
+    # Get current mode from sidebar or navigation
+    current_mode = st.session_state.get('navigation_target', mode if 'mode' in locals() else "Home")
+    
     mode = st.radio(
         "Select Feature",
         ["🏠 Home", "📸 Deepfake Detection", "📰 Fake News Detection", "😊 Sentiment Analysis"],
+        index=["🏠 Home", "📸 Deepfake Detection", "📰 Fake News Detection", "😊 Sentiment Analysis"].index(
+            f"🏠 {current_mode}" if current_mode == "Home" else 
+            f"📸 {current_mode}" if current_mode == "Deepfake Detection" else
+            f"📰 {current_mode}" if current_mode == "Fake News Detection" else
+            f"😊 {current_mode}" if current_mode == "Sentiment Analysis" else "🏠 Home"
+        ),
         label_visibility="collapsed"
     )
+    
     mode_map = {
         "🏠 Home": "Home",
         "📸 Deepfake Detection": "Deepfake Detection",
@@ -480,6 +605,13 @@ with st.sidebar:
         "😊 Sentiment Analysis": "Sentiment Analysis"
     }
     mode = mode_map[mode]
+    
+    # Add back to home button if not on home page
+    if mode != "Home":
+        st.markdown("---")
+        if st.button("🏠 Back to Home", key="back_home", use_container_width=True):
+            st.session_state.navigation_target = "Home"
+            st.rerun()
     
     st.markdown("---")
     
@@ -792,44 +924,84 @@ datasets/sentiment/train.csv
 st.markdown('<h1 class="main-header">🛡️ TruthGuard AI</h1>', unsafe_allow_html=True)
 st.markdown('<p class="sub-header">Advanced Media Authenticity & Analysis</p>', unsafe_allow_html=True)
 
-# -------------------- Home Page --------------------
+# -------------------- Home Page with Clickable Cards --------------------
 if mode == "Home":
     st.markdown("## 🌟 Welcome to TruthGuard AI")
-    st.markdown("TruthGuard AI is your comprehensive platform for detecting digital deception and analyzing media authenticity. Explore our powerful tools below:")
+    st.markdown("TruthGuard AI is your comprehensive platform for detecting digital deception and analyzing media authenticity. **Click on any card below** to explore our powerful tools:")
     
     st.markdown("<br>", unsafe_allow_html=True)
     
+    # Create three columns for the clickable cards
     col1, col2, col3 = st.columns(3)
     
     with col1:
-        st.markdown('''
-        <div class="metric-card" style="height: 100%;">
-            <h3 style="margin-top: 0; font-size: 1.5rem;">📸 Deepfake Detection</h3>
-            <p style="font-size: 1rem; opacity: 0.9;">Analyze images and videos using advanced AI models to detect manipulation and synthetic media generation.</p>
+        # Deepfake Detection Card - Clickable via HTML/JS
+        card_html = """
+        <div class="metric-card metric-card-df" onclick="navigateTo('deepfake')" style="cursor: pointer;">
+            <h3 style="margin-top: 0; font-size: 1.8rem;">📸 Deepfake Detection</h3>
+            <p style="font-size: 1.1rem; opacity: 0.95; line-height: 1.5;">Analyze images and videos using advanced AI models to detect manipulation and synthetic media generation.</p>
+            <div style="margin-top: 1rem; font-size: 0.9rem; opacity: 0.8;">👆 Click to analyze</div>
         </div>
-        ''', unsafe_allow_html=True)
+        """
+        st.markdown(card_html, unsafe_allow_html=True)
         
     with col2:
-        st.markdown('''
-        <div class="metric-card" style="background: linear-gradient(135deg, #059669 0%, #10b981 100%); height: 100%;">
-            <h3 style="margin-top: 0; font-size: 1.5rem;">📰 Fake News Detection</h3>
-            <p style="font-size: 1rem; opacity: 0.9;">Verify the authenticity of text articles with NLP models like DistilBERT and Random Forest to combat misinformation.</p>
+        # Fake News Detection Card - Clickable
+        card_html = """
+        <div class="metric-card metric-card-fn" onclick="navigateTo('fakenews')" style="cursor: pointer; background: linear-gradient(135deg, #059669 0%, #10b981 100%);">
+            <h3 style="margin-top: 0; font-size: 1.8rem;">📰 Fake News Detection</h3>
+            <p style="font-size: 1.1rem; opacity: 0.95; line-height: 1.5;">Verify the authenticity of text articles with NLP models like DistilBERT and Random Forest to combat misinformation.</p>
+            <div style="margin-top: 1rem; font-size: 0.9rem; opacity: 0.8;">👆 Click to analyze</div>
         </div>
-        ''', unsafe_allow_html=True)
+        """
+        st.markdown(card_html, unsafe_allow_html=True)
         
     with col3:
-        st.markdown('''
-        <div class="metric-card" style="background: linear-gradient(135deg, #d97706 0%, #f59e0b 100%); height: 100%;">
-            <h3 style="margin-top: 0; font-size: 1.5rem;">😊 Sentiment Analysis</h3>
-            <p style="font-size: 1rem; opacity: 0.9;">Understand the emotional tone behind text with our ensemble-based sentiment classification system.</p>
+        # Sentiment Analysis Card - Clickable
+        card_html = """
+        <div class="metric-card metric-card-sa" onclick="navigateTo('sentiment')" style="cursor: pointer; background: linear-gradient(135deg, #d97706 0%, #f59e0b 100%);">
+            <h3 style="margin-top: 0; font-size: 1.8rem;">😊 Sentiment Analysis</h3>
+            <p style="font-size: 1.1rem; opacity: 0.95; line-height: 1.5;">Understand the emotional tone behind text with our ensemble-based sentiment classification system.</p>
+            <div style="margin-top: 1rem; font-size: 0.9rem; opacity: 0.8;">👆 Click to analyze</div>
         </div>
-        ''', unsafe_allow_html=True)
-        
+        """
+        st.markdown(card_html, unsafe_allow_html=True)
+    
+    # Add hidden iframe for navigation handling
+    st.markdown("""
+    <iframe id="nav-frame" style="display:none;"></iframe>
+    <script>
+    // Listen for navigation events
+    window.addEventListener('streamlit:navigation', function(e) {
+        const feature = e.detail;
+        // Update URL query param
+        const url = new URL(window.location);
+        url.searchParams.set('nav', feature);
+        window.history.pushState({}, '', url);
+        // Reload the page to trigger Streamlit rerun
+        window.location.reload();
+    });
+    
+    // Make navigateTo function globally available
+    window.navigateTo = function(feature) {
+        const event = new CustomEvent('streamlit:navigation', { detail: feature });
+        window.dispatchEvent(event);
+    };
+    </script>
+    """, unsafe_allow_html=True)
+    
     st.markdown("<br><br>", unsafe_allow_html=True)
-    st.info("👈 Select a feature from the sidebar navigation to get started.")
+    st.info("👈 You can also select a feature from the sidebar navigation menu.")
 
-# -------------------- Deepfake Detection with Model Switching --------------------
-if mode == "Deepfake Detection":
+# -------------------- Deepfake Detection with Model Switching (COMPACT VERSION) --------------------
+elif mode == "Deepfake Detection":
+    # Add back button at the top
+    col1, col2, col3 = st.columns([1, 10, 1])
+    with col1:
+        if st.button("← Back", key="back_df"):
+            st.session_state.navigation_target = "Home"
+            st.rerun()
+    
     st.header("📸 Deepfake Detection")
     
     # Get available models from detector
@@ -839,83 +1011,80 @@ if mode == "Deepfake Detection":
     # Create model selection options
     model_options = ["Ensemble (All Models)"] + available_models
     
-    # Model selection section
-    with st.expander("🎯 Model Selection", expanded=True):
-        col1, col2 = st.columns([2, 1])
-        
-        with col1:
-            selected_model = st.selectbox(
-                "Select Detection Model",
-                options=model_options,
-                index=0,
-                key="model_selector",
-                help="Choose which model to use for detection"
-            )
-            st.session_state.selected_df_model = selected_model
-        
-        with col2:
-            st.metric("Available Models", len(available_models))
-            if selected_model == "Ensemble (All Models)":
-                st.info("🧠 Using all models for better accuracy")
-            else:
-                st.success(f"✅ Using single model: {selected_model}")
-        
-        # Show model info
-        if selected_model != "Ensemble (All Models)":
-            model_idx = available_models.index(selected_model)
+    # Compact model selection at the top
+    col1, col2 = st.columns([3, 1])
+    with col1:
+        selected_model = st.selectbox(
+            "🎯 Select Detection Model",
+            options=model_options,
+            index=0,
+            key="model_selector",
+            help="Choose which model to use for detection"
+        )
+        st.session_state.selected_df_model = selected_model
+    
+    with col2:
+        st.metric("Available", len(available_models))
+    
+    # Show model info in a small expander (optional, collapsed by default)
+    if selected_model != "Ensemble (All Models)" and selected_model in available_models:
+        model_idx = available_models.index(selected_model)
+        with st.expander("📋 Model Details", expanded=False):
             st.caption(f"Model path: {model_info['model_paths'][model_idx]}")
-        
-        # Advanced ensemble settings (only when ensemble is selected)
-        if selected_model == "Ensemble (All Models)" and st.session_state.role == "admin":
-            st.markdown("---")
-            st.markdown("#### ⚙️ Ensemble Weight Configuration")
-            st.caption("Adjust weights for each model in the ensemble")
+    
+    # Advanced ensemble settings (only for admins, in a compact form)
+    if selected_model == "Ensemble (All Models)" and st.session_state.role == "admin":
+        with st.expander("⚙️ Ensemble Weight Configuration", expanded=False):
+            st.caption("Adjust weights for ensemble models")
             
             weights = {}
             total_weight = 0
             
-            # Create sliders for each model
+            # Create compact weight sliders in columns
             cols = st.columns(2)
             for i, model_name in enumerate(available_models):
                 with cols[i % 2]:
                     default_weight = st.session_state.df_model_weights.get(model_name, 1.0)
                     weight = st.slider(
-                        f"{model_name}",
+                        f"{model_name[:12]}...",  # Truncate long names
                         min_value=0.0,
                         max_value=2.0,
                         value=default_weight,
                         step=0.1,
-                        key=f"weight_{model_name}"
+                        key=f"weight_{model_name}",
+                        label_visibility="collapsed"
                     )
                     weights[model_name] = weight
                     total_weight += weight
             
-            # Show total weight
-            st.metric("Total Weight", f"{total_weight:.1f}")
-            
-            if st.button("Apply Weights", key="apply_weights"):
-                st.session_state.df_model_weights = weights
-                deepfake_detector.set_model_weights(weights)
-                st.success("✅ Model weights updated!")
+            col1, col2 = st.columns([3, 1])
+            with col1:
+                st.caption(f"Total weight: {total_weight:.1f}")
+            with col2:
+                if st.button("Apply", key="apply_weights", use_container_width=True):
+                    st.session_state.df_model_weights = weights
+                    deepfake_detector.set_model_weights(weights)
+                    st.success("✅ Updated!")
     
-    # Main detection interface
+    # Main detection interface - Compact layout
     col1, col2 = st.columns([1, 1])
     with col1:
         thresh = st.slider(
-            "Detection Threshold", 
+            "Threshold", 
             min_value=0.1, 
             max_value=0.9, 
             value=0.65, 
             step=0.05,
-            help="Higher threshold = more strict detection"
+            help="Higher threshold = more strict detection",
+            key="threshold_slider"
         )
         deepfake_detector.threshold = thresh
     
     with col2:
         if selected_model == "Ensemble (All Models)":
-            st.metric("Active Models", len(available_models))
+            st.info(f"🧠 {len(available_models)} models active")
         else:
-            st.metric("Active Model", "1 (Single)")
+            st.success(f"✅ Single model")
     
     # Upload tabs
     upload_tab1, upload_tab2 = st.tabs(["📷 Image", "🎥 Video"])
@@ -926,7 +1095,7 @@ if mode == "Deepfake Detection":
             img = Image.open(img_file)
             st.image(img, caption="Uploaded", use_container_width=True)
             
-            if st.button("Analyze Image", key="analyze_img"):
+            if st.button("Analyze Image", key="analyze_img", use_container_width=True):
                 with st.spinner(f"Analyzing with {selected_model}..."):
                     arr = np.array(img)
                     if len(arr.shape) == 2:
@@ -952,7 +1121,7 @@ if mode == "Deepfake Detection":
             tfile.close()
             st.video(tfile.name)
             
-            if st.button("Analyze Video", key="analyze_vid"):
+            if st.button("Analyze Video", key="analyze_vid", use_container_width=True):
                 with st.spinner(f"Analyzing video with {selected_model}..."):
                     if selected_model == "Ensemble (All Models)":
                         res = deepfake_detector.detect_deepfake_video_advanced(tfile.name)
@@ -970,9 +1139,9 @@ if mode == "Deepfake Detection":
         r = st.session_state.df_result
         st.markdown("---")
         
-        # Show which model was used
+        # Show which model was used in a compact badge
         model_used = r.get('model_used', 'Ensemble')
-        st.markdown(f"**Model Used:** <span class='model-badge model-badge-ensemble'>{model_used}</span>", 
+        st.markdown(f"**Model:** <span class='model-badge model-badge-ensemble'>{model_used}</span>", 
                    unsafe_allow_html=True)
         
         st.subheader("Result")
@@ -989,31 +1158,39 @@ if mode == "Deepfake Detection":
             st.markdown(f'<div class="result-suspicious">⚠️ SUSPICIOUS ({conf:.1f}%)</div>', 
                        unsafe_allow_html=True)
         
-        # Display metrics
+        # Display metrics in a compact row
         colA, colB, colC = st.columns(3)
         colA.metric("Faces", r.get('face_count', 0))
-        colB.metric("Confidence Score", f"{r.get('ensemble_score', r.get('confidence', 0))/100:.3f}")
+        colB.metric("Confidence", f"{r.get('ensemble_score', r.get('confidence', 0))/100:.3f}")
         colC.metric("Consistency", f"{r.get('consistency', 0)*100:.1f}%")
         
-        # Show individual model scores if available
-        if 'model_scores' in r and r['model_scores']:
-            with st.expander("📊 Individual Model Scores"):
+        # Show individual model scores in an expander (if available)
+        if 'model_scores' in r and r['model_scores'] and len(r['model_scores']) > 1:
+            with st.expander("📊 Model Details", expanded=False):
                 scores_df = pd.DataFrame({
                     'Model': list(r['model_scores'].keys()),
                     'Score': list(r['model_scores'].values())
                 }).sort_values('Score', ascending=False)
                 
-                # Create bar chart
+                # Compact bar chart
                 fig = px.bar(scores_df, x='Model', y='Score', 
-                           title="Model Predictions",
+                           title="Model Scores",
                            color='Score',
-                           color_continuous_scale=['green', 'yellow', 'red'])
+                           color_continuous_scale=['green', 'yellow', 'red'],
+                           height=300)
                 st.plotly_chart(fig, use_container_width=True)
         
-        st.info(r.get('message', ''))
+        st.caption(r.get('message', ''))
 
 # -------------------- UPDATED FAKE NEWS DETECTION SECTION --------------------
 elif mode == "Fake News Detection":
+    # Add back button at the top
+    col1, col2, col3 = st.columns([1, 10, 1])
+    with col1:
+        if st.button("← Back", key="back_fn"):
+            st.session_state.navigation_target = "Home"
+            st.rerun()
+    
     st.header("📰 Fake News Detection")
     
     # Get available models
@@ -1249,6 +1426,13 @@ elif mode == "Fake News Detection":
 
 # -------------------- FIXED SENTIMENT ANALYSIS SECTION --------------------
 elif mode == "Sentiment Analysis":
+    # Add back button at the top
+    col1, col2, col3 = st.columns([1, 10, 1])
+    with col1:
+        if st.button("← Back", key="back_sa"):
+            st.session_state.navigation_target = "Home"
+            st.rerun()
+    
     st.header("😊 Sentiment Analysis")
     
     # Check if sentiment analyzer is available
@@ -1668,6 +1852,7 @@ st.markdown("---")
 st.markdown("""
 <div style='text-align:center; color:#666; padding:1rem;'>
     <p>🛡️ TruthGuard AI - Advanced Media Authenticity & Analysis</p>
+    <p style='font-size:0.8rem;'>Click any card on the home page to navigate directly to features!</p>
     <p style='font-size:0.8rem;'>Powered by Ensemble Learning, Computer Vision, and NLP</p>
 </div>
 """, unsafe_allow_html=True)
