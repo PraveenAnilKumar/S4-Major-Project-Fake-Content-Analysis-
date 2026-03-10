@@ -123,7 +123,7 @@ if 'clear_fn' not in st.session_state:
 
 # NEW: Initialize session state for navigation
 if 'navigation_target' not in st.session_state:
-    st.session_state.navigation_target = None
+    st.session_state.navigation_target = "Home"  # Default to Home
 if 'previous_mode' not in st.session_state:
     st.session_state.previous_mode = None
 
@@ -453,28 +453,12 @@ st.markdown("""
         color: #818cf8;
         border-color: #6366f1;
     }
-</style>
-
-<!-- JavaScript for handling card clicks -->
-<script>
-function navigateTo(feature) {
-    // Create a hidden input to trigger Streamlit rerun with parameter
-    const input = document.createElement('input');
-    input.type = 'hidden';
-    input.name = 'navigation';
-    input.value = feature;
-    document.body.appendChild(input);
     
-    // Trigger form submission or custom event
-    const event = new CustomEvent('streamlit:navigation', { detail: feature });
-    window.dispatchEvent(event);
-    
-    // Also try Streamlit's native setComponentValue if available
-    if (window.Streamlit) {
-        window.Streamlit.setComponentValue(feature);
+    /* Custom button styling for home page */
+    .nav-button {
+        margin-top: 20px !important;
     }
-}
-</script>
+</style>
 """, unsafe_allow_html=True)
 
 # ---------- Login / Registration ----------
@@ -539,28 +523,15 @@ if not st.session_state.authenticated:
     register_tab()
     st.stop()
 
-# ---------- Handle navigation from home page clicks ----------
-# Check for navigation parameter (from JavaScript)
-navigation_params = st.query_params if hasattr(st, 'query_params') else {}
-if 'nav' in navigation_params:
-    target = navigation_params['nav'][0] if isinstance(navigation_params['nav'], list) else navigation_params['nav']
-    if target == 'deepfake':
-        st.session_state.navigation_target = 'Deepfake Detection'
-    elif target == 'fakenews':
-        st.session_state.navigation_target = 'Fake News Detection'
-    elif target == 'sentiment':
-        st.session_state.navigation_target = 'Sentiment Analysis'
-    # Clear the query param
-    st.query_params.clear()
-
-# Also check session state for navigation
+# ---------- Handle navigation ----------
+# Check for navigation target in session state
 if st.session_state.navigation_target:
-    # Store previous mode before changing
-    st.session_state.previous_mode = mode if 'mode' in locals() else None
-    # Set the mode to the navigation target
-    mode = st.session_state.navigation_target
-    # Clear navigation target to prevent loops
+    current_mode = st.session_state.navigation_target
+    # Clear navigation target after reading it
     st.session_state.navigation_target = None
+else:
+    # Default to Home if no navigation target
+    current_mode = "Home"
 
 # ---------- Sidebar for authenticated users ----------
 with st.sidebar:
@@ -577,40 +548,47 @@ with st.sidebar:
         st.session_state.authenticated = False
         st.session_state.username = None
         st.session_state.role = None
-        st.session_state.navigation_target = None
+        st.session_state.navigation_target = "Home"
         st.rerun()
     
     st.markdown("---")
     
     st.markdown("### 🧭 Navigation")
-    # Get current mode from sidebar or navigation
-    current_mode = st.session_state.get('navigation_target', mode if 'mode' in locals() else "Home")
     
-    mode = st.radio(
-        "Select Feature",
-        ["🏠 Home", "📸 Deepfake Detection", "📰 Fake News Detection", "😊 Sentiment Analysis"],
-        index=["🏠 Home", "📸 Deepfake Detection", "📰 Fake News Detection", "😊 Sentiment Analysis"].index(
-            f"🏠 {current_mode}" if current_mode == "Home" else 
-            f"📸 {current_mode}" if current_mode == "Deepfake Detection" else
-            f"📰 {current_mode}" if current_mode == "Fake News Detection" else
-            f"😊 {current_mode}" if current_mode == "Sentiment Analysis" else "🏠 Home"
-        ),
-        label_visibility="collapsed"
-    )
-    
-    mode_map = {
+    # Define the options and their mapping
+    nav_options = ["🏠 Home", "📸 Deepfake Detection", "📰 Fake News Detection", "😊 Sentiment Analysis"]
+    nav_map = {
         "🏠 Home": "Home",
         "📸 Deepfake Detection": "Deepfake Detection",
         "📰 Fake News Detection": "Fake News Detection",
         "😊 Sentiment Analysis": "Sentiment Analysis"
     }
-    mode = mode_map[mode]
+    
+    # Find the index of the current mode
+    current_index = 0
+    for i, (display, actual) in enumerate(nav_map.items()):
+        if actual == current_mode:
+            current_index = i
+            break
+    
+    selected_display = st.radio(
+        "Select Feature",
+        nav_options,
+        index=current_index,
+        label_visibility="collapsed"
+    )
+    
+    # Update current_mode based on selection
+    selected_mode = nav_map[selected_display]
+    if selected_mode != current_mode:
+        current_mode = selected_mode
+        st.rerun()
     
     # Add back to home button if not on home page
-    if mode != "Home":
+    if current_mode != "Home":
         st.markdown("---")
         if st.button("🏠 Back to Home", key="back_home", use_container_width=True):
-            st.session_state.navigation_target = "Home"
+            current_mode = "Home"
             st.rerun()
     
     st.markdown("---")
@@ -924,77 +902,113 @@ datasets/sentiment/train.csv
 st.markdown('<h1 class="main-header">🛡️ TruthGuard AI</h1>', unsafe_allow_html=True)
 st.markdown('<p class="sub-header">Advanced Media Authenticity & Analysis</p>', unsafe_allow_html=True)
 
-# -------------------- Home Page with Clickable Cards --------------------
-if mode == "Home":
+# -------------------- Home Page with Working Buttons --------------------
+if current_mode == "Home":
     st.markdown("## 🌟 Welcome to TruthGuard AI")
-    st.markdown("TruthGuard AI is your comprehensive platform for detecting digital deception and analyzing media authenticity. **Click on any card below** to explore our powerful tools:")
+    st.markdown("TruthGuard AI is your comprehensive platform for detecting digital deception and analyzing media authenticity. **Click any button below** to explore our powerful tools:")
     
     st.markdown("<br>", unsafe_allow_html=True)
     
-    # Create three columns for the clickable cards
+    # Create three columns for the buttons
     col1, col2, col3 = st.columns(3)
     
     with col1:
-        # Deepfake Detection Card - Clickable via HTML/JS
-        card_html = """
-        <div class="metric-card metric-card-df" onclick="navigateTo('deepfake')" style="cursor: pointer;">
-            <h3 style="margin-top: 0; font-size: 1.8rem;">📸 Deepfake Detection</h3>
-            <p style="font-size: 1.1rem; opacity: 0.95; line-height: 1.5;">Analyze images and videos using advanced AI models to detect manipulation and synthetic media generation.</p>
-            <div style="margin-top: 1rem; font-size: 0.9rem; opacity: 0.8;">👆 Click to analyze</div>
-        </div>
-        """
-        st.markdown(card_html, unsafe_allow_html=True)
+        st.markdown("### 📸 Deepfake Detection")
+        st.markdown("Analyze images and videos using advanced AI models to detect manipulation and synthetic media generation.")
         
+        # Use columns to center the button
+        btn_col1, btn_col2, btn_col3 = st.columns([1, 2, 1])
+        with btn_col2:
+            if st.button("🔍 Click to analyze", key="nav_to_deepfake", use_container_width=True):
+                st.session_state.navigation_target = "Deepfake Detection"
+                st.rerun()
+    
     with col2:
-        # Fake News Detection Card - Clickable
-        card_html = """
-        <div class="metric-card metric-card-fn" onclick="navigateTo('fakenews')" style="cursor: pointer; background: linear-gradient(135deg, #059669 0%, #10b981 100%);">
-            <h3 style="margin-top: 0; font-size: 1.8rem;">📰 Fake News Detection</h3>
-            <p style="font-size: 1.1rem; opacity: 0.95; line-height: 1.5;">Verify the authenticity of text articles with NLP models like DistilBERT and Random Forest to combat misinformation.</p>
-            <div style="margin-top: 1rem; font-size: 0.9rem; opacity: 0.8;">👆 Click to analyze</div>
-        </div>
-        """
-        st.markdown(card_html, unsafe_allow_html=True)
+        st.markdown("### 📰 Fake News Detection")
+        st.markdown("Verify the authenticity of text articles with NLP models like DistilBERT and Random Forest to combat misinformation.")
         
+        # Use columns to center the button
+        btn_col1, btn_col2, btn_col3 = st.columns([1, 2, 1])
+        with btn_col2:
+            if st.button("📹 Click to analyze", key="nav_to_fakenews", use_container_width=True):
+                st.session_state.navigation_target = "Fake News Detection"
+                st.rerun()
+    
     with col3:
-        # Sentiment Analysis Card - Clickable
-        card_html = """
-        <div class="metric-card metric-card-sa" onclick="navigateTo('sentiment')" style="cursor: pointer; background: linear-gradient(135deg, #d97706 0%, #f59e0b 100%);">
-            <h3 style="margin-top: 0; font-size: 1.8rem;">😊 Sentiment Analysis</h3>
-            <p style="font-size: 1.1rem; opacity: 0.95; line-height: 1.5;">Understand the emotional tone behind text with our ensemble-based sentiment classification system.</p>
-            <div style="margin-top: 1rem; font-size: 0.9rem; opacity: 0.8;">👆 Click to analyze</div>
-        </div>
-        """
-        st.markdown(card_html, unsafe_allow_html=True)
+        st.markdown("### 😊 Sentiment Analysis")
+        st.markdown("Understand the emotional tone behind text with our ensemble-based sentiment classification system.")
+        
+        # Use columns to center the button
+        btn_col1, btn_col2, btn_col3 = st.columns([1, 2, 1])
+        with btn_col2:
+            if st.button("💬 Click to analyze", key="nav_to_sentiment", use_container_width=True):
+                st.session_state.navigation_target = "Sentiment Analysis"
+                st.rerun()
     
-    # Add hidden iframe for navigation handling
-    st.markdown("""
-    <iframe id="nav-frame" style="display:none;"></iframe>
-    <script>
-    // Listen for navigation events
-    window.addEventListener('streamlit:navigation', function(e) {
-        const feature = e.detail;
-        // Update URL query param
-        const url = new URL(window.location);
-        url.searchParams.set('nav', feature);
-        window.history.pushState({}, '', url);
-        // Reload the page to trigger Streamlit rerun
-        window.location.reload();
-    });
-    
-    // Make navigateTo function globally available
-    window.navigateTo = function(feature) {
-        const event = new CustomEvent('streamlit:navigation', { detail: feature });
-        window.dispatchEvent(event);
-    };
-    </script>
-    """, unsafe_allow_html=True)
-    
+    # Add some spacing
     st.markdown("<br><br>", unsafe_allow_html=True)
-    st.info("👈 You can also select a feature from the sidebar navigation menu.")
+    
+    # Add a feature highlights section
+    with st.expander("✨ Feature Highlights", expanded=False):
+        st.markdown("""
+        ### 🎯 What You Can Do:
+        
+        **📸 Deepfake Detection**
+        - Upload images or videos for analysis
+        - Choose between ensemble or single model detection
+        - View confidence scores and model predictions
+        - Analyze frame-by-frame for videos
+        
+        **📰 Fake News Detection**
+        - Paste news articles or upload text files
+        - Get instant authenticity verification
+        - View confidence levels and probability scores
+        - Batch process multiple articles
+        
+        **😊 Sentiment Analysis**
+        - Analyze single texts or batch process files
+        - Get sentiment (Positive/Neutral/Negative) with confidence scores
+        - View probability distributions
+        - Aspect-based analysis for detailed insights
+        """)
+    
+    # Add quick tips
+    st.info("👈 You can also select any feature from the sidebar navigation menu at any time.")
+    
+    # Show current status
+    st.markdown("### 📊 System Status")
+    col1, col2, col3 = st.columns(3)
+    
+    with col1:
+        # Check deepfake models
+        try:
+            model_info = deepfake_detector.get_model_info()
+            st.metric("Deepfake Models", len(model_info['model_names']), 
+                     delta="Active" if len(model_info['model_names']) > 0 else "⚠️ Needs training")
+        except:
+            st.metric("Deepfake Models", "0", delta="⚠️ Not loaded")
+    
+    with col2:
+        # Check fake news models
+        try:
+            fn_models = fake_news_detector.get_available_models()
+            st.metric("Fake News Models", len(fn_models), 
+                     delta="Trained" if len(fn_models) > 0 else "⚠️ Needs training")
+        except:
+            st.metric("Fake News Models", "0", delta="⚠️ Not loaded")
+    
+    with col3:
+        # Check sentiment analyzer
+        try:
+            if hasattr(sentiment_analyzer, 'is_trained') and sentiment_analyzer.is_trained:
+                st.metric("Sentiment Model", "✅ Ready", delta="Active")
+            else:
+                st.metric("Sentiment Model", "⚡ Default", delta="Ready")
+        except:
+            st.metric("Sentiment Model", "⚠️", delta="Check status")
 
 # -------------------- Deepfake Detection with Model Switching (COMPACT VERSION) --------------------
-elif mode == "Deepfake Detection":
+elif current_mode == "Deepfake Detection":
     # Add back button at the top
     col1, col2, col3 = st.columns([1, 10, 1])
     with col1:
@@ -1183,7 +1197,7 @@ elif mode == "Deepfake Detection":
         st.caption(r.get('message', ''))
 
 # -------------------- UPDATED FAKE NEWS DETECTION SECTION --------------------
-elif mode == "Fake News Detection":
+elif current_mode == "Fake News Detection":
     # Add back button at the top
     col1, col2, col3 = st.columns([1, 10, 1])
     with col1:
@@ -1425,7 +1439,7 @@ elif mode == "Fake News Detection":
                     st.plotly_chart(fig, use_container_width=True, key="fn_dist_chart")
 
 # -------------------- FIXED SENTIMENT ANALYSIS SECTION --------------------
-elif mode == "Sentiment Analysis":
+elif current_mode == "Sentiment Analysis":
     # Add back button at the top
     col1, col2, col3 = st.columns([1, 10, 1])
     with col1:
@@ -1852,7 +1866,7 @@ st.markdown("---")
 st.markdown("""
 <div style='text-align:center; color:#666; padding:1rem;'>
     <p>🛡️ TruthGuard AI - Advanced Media Authenticity & Analysis</p>
-    <p style='font-size:0.8rem;'>Click any card on the home page to navigate directly to features!</p>
+    <p style='font-size:0.8rem;'>Click any button on the home page to navigate directly to features!</p>
     <p style='font-size:0.8rem;'>Powered by Ensemble Learning, Computer Vision, and NLP</p>
 </div>
 """, unsafe_allow_html=True)
